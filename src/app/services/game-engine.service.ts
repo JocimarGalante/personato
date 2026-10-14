@@ -2,9 +2,13 @@ import { Injectable, signal, DestroyRef, inject } from '@angular/core';
 import {
   Character, Enemy, Bullet, GameState, Weapon, CharacterStats,
   DamageText, Particle, ParticleKind, GameStatus,
-  SpecialAbilityId, RareItemId, MoneyPickup
+  SpecialAbilityId, RareItemId, LegendaryItemId, UpgradeId,
+  UpgradeLevels, MoneyPickup, DiamondPickup
 } from '../models/character.model';
-import { WEAPONS, SPECIAL_ABILITIES, RARE_ITEMS } from '../data/characters';
+import {
+  WEAPONS, SPECIAL_ABILITIES, RARE_ITEMS,
+  LEGENDARY_ITEMS, UPGRADES
+} from '../data/characters';
 
 @Injectable({ providedIn: 'root' })
 export class GameEngineService {
@@ -20,6 +24,11 @@ export class GameEngineService {
     return 10 + (wave - 1) * 5;
   }
 
+  private readonly defaultUpgrades: UpgradeLevels = {
+    maxHp: 0, armor: 0, speed: 0, damage: 0,
+    attackSpeed: 0, harvesting: 0, critChance: 0
+  };
+
   readonly state = signal<GameState>({
     status: 'menu',
     wave: 1,
@@ -27,8 +36,9 @@ export class GameEngineService {
     waveDuration: GameEngineService.waveDuration(1),
     materials: 0,
     money: 0,
-    playerHp: 100,
-    playerMaxHp: 100,
+    diamonds: 0,
+    playerHp: 30,
+    playerMaxHp: 30,
     kills: 0,
     damageDealt: 0,
     autoAim: true,
@@ -36,6 +46,9 @@ export class GameEngineService {
     specialAbilityId: null,
     specialAbilityCooldown: 0,
     ownedRareItems: [],
+    ownedLegendaryItems: [],
+    upgrades: { ...this.defaultUpgrades },
+    hasRevive: false,
     screenShake: 0,
     bossActive: false
   });
@@ -43,17 +56,17 @@ export class GameEngineService {
   readonly selectedCharacter = signal<Character | null>(null);
   readonly availableWeapons = signal<Weapon[]>([]);
 
-  // Estado do jogador
   private playerX = 400;
   private playerY = 300;
   private playerStats!: CharacterStats;
+  private baseStats!: CharacterStats;         // stats base para recálculo
   private currentWeapons: Weapon[] = [];
   private weaponCooldowns: number[] = [];
   private keys: Record<string, boolean> = {};
   private isMoving = false;
   private facingAngle = 0;
+  private maxWeaponSlots = 5;
 
-  // Buffs temporários
   private buffs: {
     critBoostUntil: number;
     cadenceBoostUntil: number;
@@ -63,34 +76,30 @@ export class GameEngineService {
     invulnerableUntil: number;
     lifestealBoostUntil: number;
     nextShotLethal: boolean;
-    berserkUntil: number;      // NOVO
+    berserkUntil: number;
   } = {
     critBoostUntil: 0, cadenceBoostUntil: 0, damageBoostUntil: 0,
     speedBoostUntil: 0, armorBoostUntil: 0, invulnerableUntil: 0,
     lifestealBoostUntil: 0, nextShotLethal: false, berserkUntil: 0
   };
 
-  // Entidades
   private enemies: Enemy[] = [];
   private bullets: Bullet[] = [];
   private damageTexts: DamageText[] = [];
   private particles: Particle[] = [];
-  private moneyPickups: MoneyPickup[] = [];   // NOVO
+  private moneyPickups: MoneyPickup[] = [];
+  private diamondPickups: DiamondPickup[] = [];
   private enemyIdCounter = 0;
   private bulletIdCounter = 0;
   private damageTextIdCounter = 0;
   private particleIdCounter = 0;
   private moneyIdCounter = 0;
+  private diamondIdCounter = 0;
 
-  // Clones (habilidade 'clone')
   private clones: { x: number; y: number; expiresAt: number; cooldown: number }[] = [];
 
-  // Estado do boss
   private bossState = {
-    active: false,
-    name: '',
-    level: 0,
-    abilityCooldown: 0
+    active: false, name: '', level: 0, abilityCooldown: 0
   };
 
   readonly canvasWidth = 800;
@@ -135,16 +144,15 @@ export class GameEngineService {
 
   private onKeyPress(k: string): void {
     const s = this.state();
-
     if (k === 'escape' || k === 'p') {
-      if (s.status === 'playing' || s.status === 'shop' || s.status === 'blackMarket') {
+      if (s.status === 'playing' || s.status === 'shop' ||
+          s.status === 'blackMarket' || s.status === 'legendaryShop') {
         this.pauseGame();
       } else if (s.status === 'paused') {
         this.resumeGame();
       }
       return;
     }
-
     if (s.status !== 'playing') return;
     if (k === 'q') this.useActiveAbility('Q');
     if (k === 'e') this.useSpecialAbility();
@@ -157,17 +165,18 @@ export class GameEngineService {
   }
 
   // ═════════════════════════════════════════════════════════
-  // PAUSE / RESUME
+  // PAUSE
   // ═════════════════════════════════════════════════════════
 
   pauseGame(): void {
     const s = this.state();
-    if (s.status !== 'playing' && s.status !== 'shop' && s.status !== 'blackMarket') return;
+    if (s.status !== 'playing' && s.status !== 'shop' &&
+        s.status !== 'blackMarket' && s.status !== 'legendaryShop') return;
     this.stopLoop();
     this.state.update(st => ({
       ...st,
       status: 'paused',
-      pausedFrom: st.status as 'playing' | 'shop' | 'blackMarket'
+      pausedFrom: st.status as any
     }));
   }
 
@@ -193,9 +202,12 @@ export class GameEngineService {
 
   startGame(character: Character): void {
     this.selectedCharacter.set(character);
+    this.baseStats = { ...character.stats };
     this.playerStats = { ...character.stats };
     this.currentWeapons = character.startingWeapons.map(w => ({ ...w }));
     this.weaponCooldowns = this.currentWeapons.map(() => 0);
+    this.maxWeaponSlots = 5;
+
     this.playerX = this.canvasWidth / 2;
     this.playerY = this.canvasHeight / 2;
     this.facingAngle = 0;
@@ -204,12 +216,14 @@ export class GameEngineService {
     this.damageTexts = [];
     this.particles = [];
     this.moneyPickups = [];
+    this.diamondPickups = [];
     this.clones = [];
     this.enemyIdCounter = 0;
     this.bulletIdCounter = 0;
     this.damageTextIdCounter = 0;
     this.particleIdCounter = 0;
     this.moneyIdCounter = 0;
+    this.diamondIdCounter = 0;
     this.keys = {};
     this.isMoving = false;
     this.bossState = { active: false, name: '', level: 0, abilityCooldown: 0 };
@@ -232,6 +246,7 @@ export class GameEngineService {
       waveDuration: w1,
       materials: 0,
       money: 0,
+      diamonds: 0,
       playerHp: this.playerStats.maxHp,
       playerMaxHp: this.playerStats.maxHp,
       kills: 0,
@@ -241,6 +256,9 @@ export class GameEngineService {
       specialAbilityId: null,
       specialAbilityCooldown: 0,
       ownedRareItems: [],
+      ownedLegendaryItems: [],
+      upgrades: { ...this.defaultUpgrades },
+      hasRevive: false,
       screenShake: 0,
       bossActive: false
     });
@@ -289,6 +307,7 @@ export class GameEngineService {
     this.updateWeapons(dt, now);
     this.updateSpawning(dt);
     this.updateMoneyPickups(dt);
+    this.updateDiamondPickups(dt);
     this.updateTimer(dt);
     this.updateDamageTexts(dt);
     this.updateParticles(dt);
@@ -297,6 +316,15 @@ export class GameEngineService {
     this.updateScreenShake(dt);
     this.applyRegen(dt);
     this.updateStatusEffects(dt);
+    this.updateLegendaryEffects(dt);
+  }
+
+  private updateLegendaryEffects(dt: number): void {
+    const items = this.state().ownedLegendaryItems;
+    if (items.includes('phoenixFeather')) {
+      const healAmount = this.state().playerMaxHp * 0.03 * dt;
+      this.healPlayer(healAmount);
+    }
   }
 
   private updateBuffsExpire(now: number): void {
@@ -366,15 +394,10 @@ export class GameEngineService {
           vx: (dx / dist) * speed,
           vy: (dy / dist) * speed,
           damage: 10 * this.playerStats.damageMultiplier,
-          radius: 4,
-          color: '#4ecdc4',
-          fromPlayer: true,
-          lifetime: 0.6,
-          pierce: 0,
-          hitIds: [],
-          behavior: 'single',
-          isCrit: false,
-          damageType: 'normal'
+          radius: 4, color: '#4ecdc4',
+          fromPlayer: true, lifetime: 0.6,
+          pierce: 0, hitIds: [],
+          behavior: 'single', isCrit: false, damageType: 'normal'
         });
       }
     }
@@ -382,7 +405,6 @@ export class GameEngineService {
 
   private updateEnemies(dt: number, now: number): void {
     for (const enemy of this.enemies) {
-      // Congelamento
       if (enemy.frozenUntil && now < enemy.frozenUntil) continue;
 
       let moveSpeed = enemy.speed;
@@ -403,7 +425,6 @@ export class GameEngineService {
         if (enemy.hp <= 0) this.killEnemy(enemy);
       }
 
-      // Habilidade do boss
       if (enemy.isBoss) {
         enemy.abilityTimer = (enemy.abilityTimer ?? 5) - dt;
         if (enemy.abilityTimer <= 0) {
@@ -432,36 +453,27 @@ export class GameEngineService {
   }
 
   private bossAbility(boss: Enemy): void {
-    // Diferentes bosses têm habilidades diferentes
     if (boss.type === 'boss_goblin') {
-      // Invoca 4 goblins
       for (let i = 0; i < 4; i++) {
         const angle = (i / 4) * Math.PI * 2;
         const x = boss.x + Math.cos(angle) * 60;
         const y = boss.y + Math.sin(angle) * 60;
+        const hp = 30 + this.state().wave * 4;
         this.enemies.push({
-          id: this.enemyIdCounter++,
-          x, y,
-          hp: 30 + this.state().wave * 4,
-          maxHp: 30 + this.state().wave * 4,
-          speed: 90,
-          damage: 8,
-          radius: 10,
-          color: '#f1c40f',
-          type: 'goblin',
+          id: this.enemyIdCounter++, x, y,
+          hp, maxHp: hp, speed: 90, damage: 8,
+          radius: 10, color: '#f1c40f', type: 'goblin',
           moneyDrop: 1 + Math.floor(this.state().wave / 10)
         });
       }
       this.spawnAbilityFx('#f1c40f');
     } else if (boss.type === 'boss_reaper') {
-      // Teleporta e ataca o jogador
       boss.x = this.playerX + (Math.random() - 0.5) * 100;
       boss.y = this.playerY + (Math.random() - 0.5) * 100;
       boss.x = Math.max(40, Math.min(this.canvasWidth - 40, boss.x));
       boss.y = Math.max(40, Math.min(this.canvasHeight - 40, boss.y));
       this.spawnAbilityFx('#9b59b6');
     } else if (boss.type === 'boss_titan') {
-      // Ataque em área
       this.explode(boss.x, boss.y, 150, 25);
       this.state.update(s => ({ ...s, screenShake: 12 }));
     }
@@ -556,11 +568,15 @@ export class GameEngineService {
     if (b.behavior === 'chain' && b.chainCount && b.chainRange) {
       this.chainLightning(e, b, b.chainCount, b.chainRange);
     }
-    if (b.damageType === 'fire') {
+
+    // Item lendário: Mestre Elemental
+    const hasElemental = this.state().ownedLegendaryItems.includes('elementalMaster');
+
+    if (b.damageType === 'fire' || hasElemental) {
       e.burnTicks = 3;
       e.burnDamage = Math.ceil(b.damage * 0.3);
     }
-    if (b.damageType === 'ice') {
+    if (b.damageType === 'ice' || hasElemental) {
       e.slowUntil = performance.now() / 1000 + 2;
     }
   }
@@ -599,13 +615,24 @@ export class GameEngineService {
 
   private killEnemy(enemy: Enemy): void {
     this.enemies = this.enemies.filter(e => e.id !== enemy.id);
+    const items = this.state().ownedRareItems;
+    const legendary = this.state().ownedLegendaryItems;
+
+    // Bônus de materiais
+    let materialGain = 1;
+    if (legendary.includes('soulHarvest')) materialGain *= 2;
+
     this.state.update(s => ({
-      ...s, kills: s.kills + 1, materials: s.materials + 1
+      ...s,
+      kills: s.kills + 1,
+      materials: s.materials + materialGain
     }));
 
     // Drop de R$
     if (enemy.moneyDrop && enemy.moneyDrop > 0) {
-      for (let i = 0; i < enemy.moneyDrop; i++) {
+      let dropAmount = enemy.moneyDrop;
+      if (legendary.includes('treasureHunter')) dropAmount *= 2;
+      for (let i = 0; i < dropAmount; i++) {
         const angle = Math.random() * Math.PI * 2;
         const speed = 60 + Math.random() * 80;
         this.moneyPickups.push({
@@ -619,11 +646,40 @@ export class GameEngineService {
       }
     }
 
-    // Morte de boss
+    // Drop de diamantes (boss = 1 diamante garantido)
+    if (enemy.diamondDrop && enemy.diamondDrop > 0) {
+      for (let i = 0; i < enemy.diamondDrop; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 40 + Math.random() * 60;
+        this.diamondPickups.push({
+          id: this.diamondIdCounter++,
+          x: enemy.x, y: enemy.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          value: 1,
+          lifetime: 30
+        });
+      }
+    }
+
+    // Drop de diamante em bosses
     if (enemy.isBoss) {
+      const diamondCount = 3 + Math.floor(this.state().wave / 10);
+      for (let i = 0; i < diamondCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 60 + Math.random() * 100;
+        this.diamondPickups.push({
+          id: this.diamondIdCounter++,
+          x: enemy.x, y: enemy.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          value: 1,
+          lifetime: 40
+        });
+      }
+
       this.bossState.active = false;
       this.state.update(s => ({ ...s, bossActive: false, bossName: undefined }));
-      // Explosão visual
       this.spawnExplosion(enemy.x, enemy.y, 120);
       for (let i = 0; i < 40; i++) {
         const angle = Math.random() * Math.PI * 2;
@@ -653,9 +709,9 @@ export class GameEngineService {
   }
 
   private damageEnemy(enemy: Enemy, damage: number, isCrit: boolean): void {
-    // Item raro: Execução
     const items = this.state().ownedRareItems;
-    if (items.includes('executioner') && !enemy.isBoss && enemy.hp / enemy.maxHp < 0.15) {
+    if (items.includes('executioner') && !enemy.isBoss &&
+        enemy.hp / enemy.maxHp < 0.15) {
       damage = enemy.hp + 1;
     }
 
@@ -669,11 +725,9 @@ export class GameEngineService {
       value: Math.round(damage),
       color: isCrit ? '#f1c40f' : damage >= 30 ? '#ff8c00' : '#ffffff',
       lifetime: isCrit ? 1.0 : 0.7,
-      vy: -50,
-      isCrit
+      vy: -50, isCrit
     });
 
-    // Berserk: cura 20% do dano
     if (this.buffs.berserkUntil > performance.now() / 1000) {
       this.healPlayer(damage * 0.05);
     }
@@ -729,7 +783,6 @@ export class GameEngineService {
         const dy = e.y - this.playerY;
         const dist = Math.hypot(dx, dy);
         if (dist > effectiveRange) continue;
-        // Priorizar boss
         if (e.isBoss) return e;
         if (dist < bestGlobalDist) { bestGlobalDist = dist; bestGlobal = e; }
 
@@ -776,7 +829,6 @@ export class GameEngineService {
     if (charId === 'engineer' && weapon.behavior === 'explosive') damage *= 1.3;
     if (charId === 'speedy') damage *= this.isMoving ? 1.4 : 0.6;
 
-    // Item: Sobrecarga
     if (items.includes('overcharge')) damage *= 1.5;
 
     if (this.buffs.damageBoostUntil > now) damage *= 2;
@@ -789,8 +841,11 @@ export class GameEngineService {
 
     damage = Math.max(1, damage);
 
+    // Item lendário: Mira Perfeita
     let critChance = this.playerStats.critChance;
+    if (this.state().ownedLegendaryItems.includes('perfectAim')) critChance = 1;
     if (this.buffs.critBoostUntil > now) critChance = Math.min(1, critChance + 0.5);
+
     const isCrit = Math.random() < critChance;
     if (isCrit) damage *= this.playerStats.critMultiplier;
 
@@ -877,6 +932,15 @@ export class GameEngineService {
 
   private updateAbilityCooldowns(dt: number): void {
     const s = this.state();
+    // Energia Infinita: sem cooldowns
+    if (s.ownedLegendaryItems.includes('infiniteEnergy')) {
+      const cleared: Record<string, number> = {};
+      for (const id of Object.keys(s.abilityCooldowns)) cleared[id] = 0;
+      if (JSON.stringify(cleared) !== JSON.stringify(s.abilityCooldowns)) {
+        this.state.update(st => ({ ...st, abilityCooldowns: cleared }));
+      }
+      return;
+    }
     const cd = { ...s.abilityCooldowns };
     let changed = false;
     for (const id of Object.keys(cd)) {
@@ -970,11 +1034,17 @@ export class GameEngineService {
   }
 
   // ═════════════════════════════════════════════════════════
-  // HABILIDADE ESPECIAL (E) — comprada com R$
+  // HABILIDADE ESPECIAL (E)
   // ═════════════════════════════════════════════════════════
 
   private updateSpecialCooldown(dt: number): void {
     const s = this.state();
+    if (s.ownedLegendaryItems.includes('infiniteEnergy')) {
+      if (s.specialAbilityCooldown !== 0) {
+        this.state.update(st => ({ ...st, specialAbilityCooldown: 0 }));
+      }
+      return;
+    }
     if (s.specialAbilityCooldown > 0) {
       this.state.update(st => ({
         ...st,
@@ -1030,9 +1100,7 @@ export class GameEngineService {
       }
       case 'timeFreeze': {
         const until = now + 5;
-        for (const e of this.enemies) {
-          e.frozenUntil = until;
-        }
+        for (const e of this.enemies) e.frozenUntil = until;
         this.spawnAbilityFx('#00bfff');
         break;
       }
@@ -1082,7 +1150,7 @@ export class GameEngineService {
   }
 
   // ═════════════════════════════════════════════════════════
-  // LOJA NEGRA
+  // LOJAS
   // ═════════════════════════════════════════════════════════
 
   openBlackMarket(): void {
@@ -1090,6 +1158,14 @@ export class GameEngineService {
   }
 
   closeBlackMarket(): void {
+    this.state.update(s => ({ ...s, status: 'shop' }));
+  }
+
+  openLegendaryShop(): void {
+    this.state.update(s => ({ ...s, status: 'legendaryShop' }));
+  }
+
+  closeLegendaryShop(): void {
     this.state.update(s => ({ ...s, status: 'shop' }));
   }
 
@@ -1115,9 +1191,7 @@ export class GameEngineService {
     if (s.money < item.price) return false;
     if (s.ownedRareItems.includes(id)) return false;
 
-    // Aplicar efeito permanente
     this.applyRareItemEffect(id);
-
     this.state.update(st => ({
       ...st,
       money: st.money - item.price,
@@ -1128,23 +1202,183 @@ export class GameEngineService {
 
   private applyRareItemEffect(id: RareItemId): void {
     switch (id) {
-      case 'overcharge':
-        this.playerStats.damageMultiplier *= 1.5;
-        break;
-      case 'warpSpeed':
-        this.playerStats.speed *= 1.4;
-        break;
-      case 'guardian':
-        this.playerStats.armor += 5;
-        break;
+      case 'overcharge': this.playerStats.damageMultiplier *= 1.5; break;
+      case 'warpSpeed': this.playerStats.speed *= 1.4; break;
+      case 'guardian': this.playerStats.armor += 5; break;
       case 'ghost':
         this.playerStats.dodge = Math.min(0.75, this.playerStats.dodge + 0.25);
         break;
-      case 'vampirism':
-        this.playerStats.lifesteal += 5;
-        break;
-      // 'duplicator', 'executioner', 'magnet' são tratados em runtime
+      case 'vampirism': this.playerStats.lifesteal += 5; break;
     }
+  }
+
+  // ─── LENDÁRIOS ───
+
+  buyLegendaryItem(id: LegendaryItemId): boolean {
+    const s = this.state();
+    const item = LEGENDARY_ITEMS.find(i => i.id === id);
+    if (!item) return false;
+    if (s.diamonds < item.price) return false;
+    if (s.ownedLegendaryItems.includes(id)) return false;
+
+    this.applyLegendaryEffect(id);
+    this.state.update(st => ({
+      ...st,
+      diamonds: st.diamonds - item.price,
+      ownedLegendaryItems: [...st.ownedLegendaryItems, id]
+    }));
+    return true;
+  }
+
+  private applyLegendaryEffect(id: LegendaryItemId): void {
+    switch (id) {
+      case 'deathRay':
+        this.maxWeaponSlots = 7;
+        break;
+      case 'timeLord':
+        // será aplicado em endWave
+        break;
+      case 'divineShield':
+        this.state.update(s => ({ ...s, hasRevive: true }));
+        break;
+      case 'soulHarvest':
+        // aplicado em killEnemy
+        break;
+      // Outros efeitos são tratados em runtime
+    }
+  }
+
+  // ─── UPGRADES ───
+
+  getUpgradePrice(id: UpgradeId): number {
+    const up = UPGRADES.find(u => u.id === id);
+    if (!up) return 0;
+    const level = this.state().upgrades[id];
+    return Math.floor(up.basePrice * Math.pow(up.priceScale, level));
+  }
+
+  buyUpgrade(id: UpgradeId): boolean {
+    const s = this.state();
+    const up = UPGRADES.find(u => u.id === id);
+    if (!up) return false;
+
+    const currentLevel = s.upgrades[id];
+    if (currentLevel >= up.maxLevel) return false;
+
+    const price = this.getUpgradePrice(id);
+    if (s.money < price) return false;
+
+    // Aplicar efeito
+    this.applyUpgrade(id, up.effectPerLevel);
+
+    // Atualizar nível e subtrair dinheiro
+    const newUpgrades = { ...s.upgrades };
+    newUpgrades[id] = currentLevel + 1;
+
+    this.state.update(st => ({
+      ...st,
+      money: st.money - price,
+      upgrades: newUpgrades
+    }));
+
+    return true;
+  }
+
+  private applyUpgrade(id: UpgradeId, effect: number): void {
+    switch (id) {
+      case 'maxHp':
+        this.playerStats.maxHp += effect;
+        this.baseStats.maxHp += effect;
+        this.state.update(s => ({
+          ...s,
+          playerMaxHp: this.playerStats.maxHp,
+          playerHp: Math.min(s.playerHp + effect, this.playerStats.maxHp)
+        }));
+        break;
+      case 'armor':
+        this.playerStats.armor += effect;
+        break;
+      case 'speed':
+        this.playerStats.speed += effect;
+        break;
+      case 'damage':
+        this.playerStats.damageMultiplier += effect;
+        break;
+      case 'attackSpeed':
+        this.playerStats.attackSpeed += effect;
+        break;
+      case 'harvesting':
+        this.playerStats.harvesting += effect;
+        break;
+      case 'critChance':
+        this.playerStats.critChance += effect;
+        break;
+    }
+  }
+
+  // ═════════════════════════════════════════════════════════
+  // SUBSTITUIR ARMA
+  // ═════════════════════════════════════════════════════════
+
+  // Compra arma: se há espaço, adiciona; senão, abre diálogo
+  tryBuyWeapon(weapon: Weapon): void {
+    const s = this.state();
+    const cost = 10 + s.wave * 2;
+    if (s.materials < cost) return;
+
+    if (this.currentWeapons.length < this.maxWeaponSlots) {
+      this.state.update(st => ({ ...st, materials: st.materials - cost }));
+      this.currentWeapons.push({ ...weapon });
+      this.weaponCooldowns.push(0);
+    } else {
+      // Abrir diálogo de substituição
+      this.state.update(st => ({
+        ...st,
+        status: 'replaceWeapon',
+        pendingWeapon: weapon,
+        pendingWeaponPrice: cost
+      }));
+    }
+  }
+
+  confirmReplaceWeapon(slotIndex: number): void {
+    const s = this.state();
+    if (!s.pendingWeapon || s.pendingWeaponPrice === undefined) return;
+
+    this.state.update(st => ({ ...st, materials: st.materials - s.pendingWeaponPrice! }));
+    this.currentWeapons[slotIndex] = { ...s.pendingWeapon };
+    this.weaponCooldowns[slotIndex] = 0;
+
+    this.state.update(st => ({
+      ...st,
+      status: 'shop',
+      pendingWeapon: undefined,
+      pendingWeaponPrice: undefined
+    }));
+  }
+
+  cancelReplaceWeapon(): void {
+    this.state.update(st => ({
+      ...st,
+      status: 'shop',
+      pendingWeapon: undefined,
+      pendingWeaponPrice: undefined
+    }));
+  }
+
+  sellWeapon(slotIndex: number): void {
+    const weapon = this.currentWeapons[slotIndex];
+    if (!weapon) return;
+    const refund = Math.floor((10 + this.state().wave * 2) * 0.4);
+    this.currentWeapons.splice(slotIndex, 1);
+    this.weaponCooldowns.splice(slotIndex, 1);
+    this.state.update(st => ({ ...st, materials: st.materials + refund }));
+  }
+
+  // Compatibilidade: buyWeapon → tryBuyWeapon
+  buyWeapon(weapon: Weapon): boolean {
+    this.tryBuyWeapon(weapon);
+    return true;
   }
 
   // ═════════════════════════════════════════════════════════
@@ -1154,27 +1388,24 @@ export class GameEngineService {
   private updateSpawning(dt: number): void {
     const s = this.state();
 
-    // Se é onda de boss e ainda não spawnou, spawna agora
     if (s.wave % 10 === 0 && !this.bossState.active && this.enemies.length === 0) {
       this.spawnBoss(s.wave);
       return;
     }
 
-    // Se boss está ativo, não spawna inimigos normais (ou spawna menos)
     if (this.bossState.active) {
-      // Goblins ocasionais para o boss_goblin
       const spawnRate = 0.15;
-      if (Math.random() < spawnRate * dt) {
-        this.spawnNormalEnemy(s.wave);
-      }
+      if (Math.random() < spawnRate * dt) this.spawnNormalEnemy(s.wave);
       return;
     }
 
-    const spawnRate = 0.8 + s.wave * 0.15;
+    // Dificuldade aumentada: spawn rate maior
+    const spawnRate = 1.2 + s.wave * 0.22;
     if (Math.random() >= spawnRate * dt) return;
 
-    // Chance de Goblin da Fortuna (2% por spawn, escala com onda)
-    const goblinChance = 0.02 + s.wave * 0.002;
+    // Chance de goblin (com Treasure Hunter é 3x)
+    let goblinChance = 0.025 + s.wave * 0.0025;
+    if (s.ownedLegendaryItems.includes('treasureHunter')) goblinChance *= 3;
     if (Math.random() < goblinChance) {
       this.spawnGoblin(s.wave);
       return;
@@ -1194,28 +1425,23 @@ export class GameEngineService {
       default: x = -margin; y = Math.random() * this.canvasHeight; break;
     }
 
+    // Dificuldade aumentada
     const roll = Math.random();
     let type: Enemy['type'] = 'normal';
-    let hp = 15 + wave * 5;
-    let speed = 60 + wave * 3;
-    let damage = 5 + wave * 2;
+    let hp = 20 + wave * 8;
+    let speed = 70 + wave * 4;
+    let damage = 6 + wave * 3;
     let radius = 12;
     let color = '#e74c3c';
 
-    if (roll < 0.2 && wave >= 3) {
-      type = 'fast';
-      hp = 10 + wave * 3;
-      speed = 120 + wave * 5;
-      damage = 4 + wave;
-      radius = 8;
-      color = '#f39c12';
-    } else if (roll < 0.35 && wave >= 5) {
-      type = 'tank';
-      hp = 40 + wave * 12;
-      speed = 40 + wave * 2;
-      damage = 12 + wave * 3;
-      radius = 20;
-      color = '#8e44ad';
+    if (roll < 0.25 && wave >= 2) {
+      type = 'fast'; hp = 14 + wave * 5;
+      speed = 130 + wave * 6; damage = 5 + wave * 2;
+      radius = 8; color = '#f39c12';
+    } else if (roll < 0.42 && wave >= 4) {
+      type = 'tank'; hp = 55 + wave * 18;
+      speed = 45 + wave * 3; damage = 14 + wave * 4;
+      radius = 20; color = '#8e44ad';
     }
 
     this.enemies.push({
@@ -1235,91 +1461,78 @@ export class GameEngineService {
       default: x = -margin; y = Math.random() * this.canvasHeight; break;
     }
 
-    const hp = 25 + wave * 8;
+    const hp = 30 + wave * 10;
+    const isDiamondGoblin = Math.random() < 0.08; // 8% chance de goblin com diamante
 
     this.enemies.push({
       id: this.enemyIdCounter++,
       x, y,
       hp, maxHp: hp,
-      speed: 130 + wave * 4,        // rápida, difícil de acertar
+      speed: 140 + wave * 4,
       damage: 3,
-      radius: 11,
-      color: '#f1c40f',             // dourado
+      radius: isDiamondGoblin ? 13 : 11,
+      color: isDiamondGoblin ? '#00ffff' : '#f1c40f',
       type: 'goblin',
-      moneyDrop: 3 + Math.floor(wave / 5)
+      moneyDrop: 3 + Math.floor(wave / 5),
+      diamondDrop: isDiamondGoblin ? 1 : 0
     });
   }
 
   private spawnBoss(wave: number): void {
-    const bossLevel = wave / 10;   // 1, 2, 3...
+    const bossLevel = wave / 10;
     let bossType: Enemy['type'] = 'boss_goblin';
     let bossName = 'Rei Goblin';
     let color = '#f1c40f';
     let radius = 40;
 
     if (bossLevel % 3 === 2) {
-      bossType = 'boss_reaper';
-      bossName = 'Ceifador Sombrio';
-      color = '#8e44ad';
-      radius = 42;
+      bossType = 'boss_reaper'; bossName = 'Ceifador Sombrio';
+      color = '#8e44ad'; radius = 42;
     } else if (bossLevel % 3 === 0) {
-      bossType = 'boss_titan';
-      bossName = 'Titã Ancestral';
-      color = '#c0392b';
-      radius = 48;
+      bossType = 'boss_titan'; bossName = 'Titã Ancestral';
+      color = '#c0392b'; radius = 48;
     }
 
-    const hp = 600 + wave * 120;   // escala forte com a onda
-    const speed = 40 + bossLevel * 5;
-    const damage = 15 + bossLevel * 8;
-
-    // Spawna em posição aleatória acima do jogador
+    const hp = 900 + wave * 180;
+    const speed = 45 + bossLevel * 6;
+    const damage = 18 + bossLevel * 10;
     const x = this.canvasWidth / 2;
     const y = -80;
 
-    const boss: Enemy = {
+    this.enemies.push({
       id: this.enemyIdCounter++,
-      x, y,
-      hp, maxHp: hp,
-      speed, damage,
-      radius, color,
-      type: bossType,
-      isBoss: true,
-      bossName,
-      moneyDrop: 15 + bossLevel * 5,
+      x, y, hp, maxHp: hp, speed, damage, radius, color,
+      type: bossType, isBoss: true, bossName,
+      moneyDrop: 20 + bossLevel * 8,
       abilityTimer: 5
-    };
-
-    this.enemies.push(boss);
+    });
 
     this.bossState.active = true;
     this.bossState.name = bossName;
     this.bossState.level = bossLevel;
 
     this.state.update(s => ({
-      ...s,
-      bossActive: true,
-      bossName,
-      screenShake: 20
+      ...s, bossActive: true, bossName, screenShake: 20
     }));
 
-    // Efeito visual de entrada
     for (let i = 0; i < 30; i++) {
       const angle = (i / 30) * Math.PI * 2;
       this.particles.push({
         id: this.particleIdCounter++,
-        x: boss.x, y: boss.y,
+        x, y,
         vx: Math.cos(angle) * 200,
         vy: Math.sin(angle) * 200,
         life: 1.2, maxLife: 1.2,
-        color: color, size: 6, kind: 'bossAura'
+        color, size: 6, kind: 'bossAura'
       });
     }
   }
 
   private updateMoneyPickups(dt: number): void {
     const items = this.state().ownedRareItems;
-    const magnetRadius = items.includes('magnet') ? 200 : 0;
+    const legendary = this.state().ownedLegendaryItems;
+    const magnetRadius = legendary.includes('diamondMagnet') ? 9999 :
+                          items.includes('magnet') ? 200 : 0;
 
     this.moneyPickups = this.moneyPickups.filter(p => {
       p.x += p.vx * dt;
@@ -1332,24 +1545,53 @@ export class GameEngineService {
       const dy = this.playerY - p.y;
       const d = Math.hypot(dx, dy);
 
-      // Atração magnética
       if (magnetRadius > 0 && d < magnetRadius && d > 0.01) {
-        p.x += (dx / d) * 300 * dt;
-        p.y += (dy / d) * 300 * dt;
+        p.x += (dx / d) * 400 * dt;
+        p.y += (dy / d) * 400 * dt;
       }
 
-      // Coleta
       if (d < 25) {
         this.state.update(s => ({ ...s, money: s.money + p.value }));
         this.damageTexts.push({
           id: this.damageTextIdCounter++,
-          x: p.x, y: p.y,
-          value: p.value,
-          color: '#f1c40f',
-          lifetime: 1.0,
-          vy: -60,
-          isCrit: false,
-          isMoney: true
+          x: p.x, y: p.y, value: p.value,
+          color: '#f1c40f', lifetime: 1.0, vy: -60,
+          isCrit: false, isMoney: true
+        });
+        return false;
+      }
+
+      return p.lifetime > 0;
+    });
+  }
+
+  private updateDiamondPickups(dt: number): void {
+    const legendary = this.state().ownedLegendaryItems;
+    const magnetRadius = legendary.includes('diamondMagnet') ? 9999 : 150;
+
+    this.diamondPickups = this.diamondPickups.filter(p => {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.94;
+      p.vy *= 0.94;
+      p.lifetime -= dt;
+
+      const dx = this.playerX - p.x;
+      const dy = this.playerY - p.y;
+      const d = Math.hypot(dx, dy);
+
+      if (magnetRadius > 0 && d < magnetRadius && d > 0.01) {
+        p.x += (dx / d) * 350 * dt;
+        p.y += (dy / d) * 350 * dt;
+      }
+
+      if (d < 25) {
+        this.state.update(s => ({ ...s, diamonds: s.diamonds + p.value }));
+        this.damageTexts.push({
+          id: this.damageTextIdCounter++,
+          x: p.x, y: p.y, value: p.value,
+          color: '#00ffff', lifetime: 1.2, vy: -70,
+          isCrit: false, isDiamond: true
         });
         return false;
       }
@@ -1369,15 +1611,18 @@ export class GameEngineService {
     const harvest = this.playerStats.harvesting;
     const newMaterials = s.materials + harvest;
     const nextWave = s.wave + 1;
-    const nextDuration = GameEngineService.waveDuration(nextWave);
+
+    // Senhor do Tempo: +10s em toda onda
+    let waveTime = GameEngineService.waveDuration(nextWave);
+    if (s.ownedLegendaryItems.includes('timeLord')) waveTime += 10;
 
     this.stopLoop();
     this.state.set({
       ...s,
       status: 'shop',
       wave: nextWave,
-      timeLeft: nextDuration,
-      waveDuration: nextDuration,
+      timeLeft: waveTime,
+      waveDuration: waveTime,
       materials: newMaterials,
       pausedFrom: undefined
     });
@@ -1414,6 +1659,15 @@ export class GameEngineService {
     this.state.update(s => {
       const newHp = Math.max(0, s.playerHp - finalDamage);
       if (newHp <= 0) {
+        // Revive lendário
+        if (s.hasRevive) {
+          return {
+            ...s,
+            playerHp: s.playerMaxHp * 0.5,
+            hasRevive: false,
+            screenShake: 20
+          };
+        }
         this.stopLoop();
         return { ...s, playerHp: 0, status: 'gameover' };
       }
@@ -1457,7 +1711,8 @@ export class GameEngineService {
     const colors: Record<ParticleKind, string> = {
       spark: '#fff', smoke: '#666', explosion: '#ff8c00',
       heal: '#2ecc71', ring: '#f1c40f', lightning: '#9b59b6',
-      fire: '#ff4500', ice: '#00bfff', money: '#f1c40f', bossAura: '#e74c3c'
+      fire: '#ff4500', ice: '#00bfff', money: '#f1c40f',
+      bossAura: '#e74c3c', diamond: '#00ffff'
     };
     this.particles.push({
       id: this.particleIdCounter++,
@@ -1474,8 +1729,7 @@ export class GameEngineService {
   private spawnExplosion(x: number, y: number, radius: number): void {
     this.particles.push({
       id: this.particleIdCounter++,
-      x, y,
-      vx: 0, vy: 0,
+      x, y, vx: 0, vy: 0,
       life: 0.4, maxLife: 0.4,
       color: '#ff8c00', size: radius, kind: 'explosion'
     });
@@ -1497,8 +1751,7 @@ export class GameEngineService {
   private spawnLightning(x1: number, y1: number, x2: number, y2: number): void {
     this.particles.push({
       id: this.particleIdCounter++,
-      x: x1, y: y1,
-      vx: 0, vy: 0,
+      x: x1, y: y1, vx: 0, vy: 0,
       life: 0.15, maxLife: 0.15,
       color: '#9b59b6', size: 3, kind: 'lightning',
       targetX: x2, targetY: y2
@@ -1573,21 +1826,6 @@ export class GameEngineService {
     return result;
   }
 
-  buyWeapon(weapon: Weapon): boolean {
-    const cost = 10 + this.state().wave * 2;
-    if (this.state().materials < cost) return false;
-    this.state.update(s => ({ ...s, materials: s.materials - cost }));
-
-    if (this.currentWeapons.length < 6) {
-      this.currentWeapons.push({ ...weapon });
-      this.weaponCooldowns.push(0);
-    } else {
-      this.currentWeapons[0] = { ...weapon };
-      this.weaponCooldowns[0] = 0;
-    }
-    return true;
-  }
-
   skipShop(): void {
     this.availableWeapons.set([]);
     this.state.update(s => ({ ...s, status: 'playing' }));
@@ -1615,7 +1853,6 @@ export class GameEngineService {
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(-20, -20, this.canvasWidth + 40, this.canvasHeight + 40);
 
-    // Grade especial durante boss
     ctx.strokeStyle = this.bossState.active ? '#3a1a1a' : '#16213e';
     ctx.lineWidth = 1;
     for (let x = 0; x < this.canvasWidth; x += 40) {
@@ -1640,7 +1877,29 @@ export class GameEngineService {
 
     this.renderParticles(ctx, 'behind');
 
-    // Pickups de R$
+    // Diamantes
+    for (const p of this.diamondPickups) {
+      const pulse = 1 + Math.sin(performance.now() / 150) * 0.2;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(performance.now() / 500);
+      ctx.beginPath();
+      ctx.moveTo(0, -10 * pulse);
+      ctx.lineTo(8 * pulse, 0);
+      ctx.lineTo(0, 10 * pulse);
+      ctx.lineTo(-8 * pulse, 0);
+      ctx.closePath();
+      ctx.fillStyle = '#00ffff';
+      ctx.shadowColor = '#00ffff';
+      ctx.shadowBlur = 20;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // R$
     for (const p of this.moneyPickups) {
       const pulse = 1 + Math.sin(performance.now() / 200) * 0.15;
       ctx.beginPath();
@@ -1660,7 +1919,6 @@ export class GameEngineService {
 
     // Inimigos
     for (const enemy of this.enemies) {
-      // Aura do boss
       if (enemy.isBoss) {
         ctx.save();
         ctx.globalAlpha = 0.3 + Math.sin(performance.now() / 150) * 0.15;
@@ -1671,7 +1929,6 @@ export class GameEngineService {
         ctx.restore();
       }
 
-      // Congelamento
       if (enemy.frozenUntil && performance.now() / 1000 < enemy.frozenUntil) {
         ctx.save();
         ctx.globalAlpha = 0.5;
@@ -1687,28 +1944,21 @@ export class GameEngineService {
       ctx.fillStyle = enemy.color;
       ctx.fill();
 
-      // Símbolo R$ no goblin
       if (enemy.type === 'goblin') {
         ctx.fillStyle = '#000';
         ctx.font = 'bold 11px monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('$', enemy.x, enemy.y);
+        ctx.fillText(enemy.diamondDrop && enemy.diamondDrop > 0 ? '💎' : '$', enemy.x, enemy.y);
       }
 
       if (enemy.isBoss) {
-        ctx.save();
-        ctx.font = 'bold 11px monospace';
+        ctx.font = 'bold 18px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = '#fff';
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 3;
-        ctx.strokeText('👑', enemy.x, enemy.y);
+        ctx.textBaseline = 'middle';
         ctx.fillText('👑', enemy.x, enemy.y);
-        ctx.restore();
       }
 
-      // Barra de vida
       const hpRatio = enemy.hp / enemy.maxHp;
       const barW = enemy.isBoss ? 60 : 30;
       ctx.fillStyle = '#333';
@@ -1716,7 +1966,6 @@ export class GameEngineService {
       ctx.fillStyle = hpRatio > 0.5 ? '#2ecc71' : hpRatio > 0.25 ? '#f39c12' : '#e74c3c';
       ctx.fillRect(enemy.x - barW / 2, enemy.y - enemy.radius - 12, barW * hpRatio, enemy.isBoss ? 8 : 4);
 
-      // Nome do boss
       if (enemy.isBoss && enemy.bossName) {
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 11px monospace';
@@ -1725,7 +1974,6 @@ export class GameEngineService {
       }
     }
 
-    // Balas
     for (const bullet of this.bullets) {
       ctx.beginPath();
       ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
@@ -1738,7 +1986,6 @@ export class GameEngineService {
 
     this.renderParticles(ctx, 'front');
 
-    // Clones
     for (const c of this.clones) {
       ctx.save();
       ctx.globalAlpha = 0.6;
@@ -1752,7 +1999,6 @@ export class GameEngineService {
       ctx.restore();
     }
 
-    // Invulnerabilidade
     const isInvuln = this.buffs.invulnerableUntil > performance.now() / 1000;
     if (isInvuln) {
       ctx.save();
@@ -1764,7 +2010,6 @@ export class GameEngineService {
       ctx.restore();
     }
 
-    // Jogador
     ctx.beginPath();
     ctx.arc(this.playerX, this.playerY, 16, 0, Math.PI * 2);
     ctx.fillStyle = this.selectedCharacter()?.color ?? '#4ecdc4';
@@ -1788,11 +2033,10 @@ export class GameEngineService {
     ctx.textBaseline = 'middle';
     ctx.fillText(this.selectedCharacter()?.emoji ?? '🥔', this.playerX, this.playerY);
 
-    // Textos de dano
     for (const t of this.damageTexts) {
       ctx.save();
       ctx.globalAlpha = Math.min(1, t.lifetime * 1.5);
-      ctx.font = t.isMoney
+      ctx.font = t.isMoney || t.isDiamond
         ? 'bold 16px monospace'
         : (t.isCrit ? 'bold 20px monospace' : 'bold 14px monospace');
       ctx.textAlign = 'center';
@@ -1800,8 +2044,8 @@ export class GameEngineService {
       ctx.fillStyle = t.color;
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 3;
-      const text = t.isMoney
-        ? `+R$${t.value}`
+      const text = t.isDiamond ? `💎+${t.value}`
+        : t.isMoney ? `+R$${t.value}`
         : (t.value === 0 ? 'ESQUIVA!' : String(t.value));
       ctx.strokeText(text, t.x, t.y);
       ctx.fillText(text, t.x, t.y);
@@ -1816,7 +2060,7 @@ export class GameEngineService {
   private renderParticles(ctx: CanvasRenderingContext2D, layer: 'front' | 'behind'): void {
     for (const p of this.particles) {
       const layerMatch =
-        (layer === 'front' && (['spark', 'heal', 'lightning', 'fire', 'ice', 'money', 'bossAura'] as ParticleKind[]).includes(p.kind)) ||
+        (layer === 'front' && (['spark', 'heal', 'lightning', 'fire', 'ice', 'money', 'bossAura', 'diamond'] as ParticleKind[]).includes(p.kind)) ||
         (layer === 'behind' && (['smoke', 'explosion', 'ring'] as ParticleKind[]).includes(p.kind));
       if (!layerMatch) continue;
 
@@ -1877,7 +2121,7 @@ export class GameEngineService {
     ctx.font = '12px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`${Math.ceil(s.playerHp)}/${s.playerMaxHp}`, 16, 20);
+    ctx.fillText(`${Math.ceil(s.playerHp)}/${Math.ceil(s.playerMaxHp)}`, 16, 20);
 
     // Onda e tempo
     ctx.font = 'bold 16px monospace';
@@ -1885,40 +2129,43 @@ export class GameEngineService {
     ctx.fillText(`Onda ${s.wave}`, this.canvasWidth - 20, 20);
     ctx.fillText(`⏱ ${Math.ceil(s.timeLeft)}s`, this.canvasWidth - 20, 45);
 
-    // Barra de progresso da onda
+    // Barra de progresso
     const prog = 1 - (s.timeLeft / s.waveDuration);
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(this.canvasWidth - 200, 60, 180, 6);
     ctx.fillStyle = '#4ecdc4';
     ctx.fillRect(this.canvasWidth - 200, 60, 180 * prog, 6);
 
-    // Materiais
+    // Recursos
     ctx.textAlign = 'left';
     ctx.fillStyle = '#f1c40f';
     ctx.font = 'bold 13px monospace';
     ctx.fillText(`💎 ${s.materials}`, 10, 55);
 
-    // Dinheiro R$
     ctx.fillStyle = '#2ecc71';
     ctx.font = 'bold 15px monospace';
     ctx.fillText(`R$ ${s.money}`, 10, 78);
+
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(`💠 ${s.diamonds}`, 10, 100);
 
     // Armas
     ctx.font = '20px sans-serif';
     ctx.textBaseline = 'middle';
     for (let i = 0; i < this.currentWeapons.length; i++) {
-      ctx.fillText(this.currentWeapons[i].icon, 16 + i * 28, 105);
+      ctx.fillText(this.currentWeapons[i].icon, 16 + i * 28, 128);
     }
 
     // Auto-aim
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'left';
     ctx.fillStyle = s.autoAim ? '#2ecc71' : '#e74c3c';
-    ctx.fillText(s.autoAim ? '● AUTO' : '○ MANUAL [ESPAÇO]', 10, 135);
+    ctx.fillText(s.autoAim ? '● AUTO' : '○ MANUAL [ESPAÇO]', 10, 158);
 
-    // Habilidade ativa Q
+    // Habilidades Q e E
     const char = this.selectedCharacter();
-    let hudY = 150;
+    let hudY = 175;
     if (char) {
       const activeAb = char.abilities.find(a => a.trigger === 'active');
       if (activeAb) {
@@ -1933,16 +2180,14 @@ export class GameEngineService {
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(
-          ready
-            ? `[Q] ${activeAb.icon} ${activeAb.name}`
-            : `[Q] ${activeAb.icon} ${activeAb.name} (${cd.toFixed(1)}s)`,
+          ready ? `[Q] ${activeAb.icon} ${activeAb.name}`
+                : `[Q] ${activeAb.icon} ${activeAb.name} (${cd.toFixed(1)}s)`,
           16, hudY + 10
         );
         hudY += 24;
       }
     }
 
-    // Habilidade especial E
     if (s.specialAbilityId) {
       const ability = SPECIAL_ABILITIES.find(a => a.id === s.specialAbilityId);
       if (ability) {
@@ -1956,32 +2201,30 @@ export class GameEngineService {
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(
-          ready
-            ? `[E] ${ability.icon} ${ability.name}`
-            : `[E] ${ability.icon} ${ability.name} (${s.specialAbilityCooldown.toFixed(1)}s)`,
+          ready ? `[E] ${ability.icon} ${ability.name}`
+                : `[E] ${ability.icon} ${ability.name} (${s.specialAbilityCooldown.toFixed(1)}s)`,
           16, hudY + 10
         );
       }
     }
 
-    // Buffs ativos
+    // Buffs
     const now = performance.now() / 1000;
-    const activeBuffs: string[] = [];
-    if (this.buffs.critBoostUntil > now) activeBuffs.push('🎯');
-    if (this.buffs.cadenceBoostUntil > now) activeBuffs.push('⚡');
-    if (this.buffs.damageBoostUntil > now) activeBuffs.push('😡');
-    if (this.buffs.speedBoostUntil > now) activeBuffs.push('💨');
-    if (this.buffs.invulnerableUntil > now) activeBuffs.push('🛡️');
-    if (this.buffs.berserkUntil > now) activeBuffs.push('🔥');
+    const buffs: string[] = [];
+    if (this.buffs.critBoostUntil > now) buffs.push('🎯');
+    if (this.buffs.cadenceBoostUntil > now) buffs.push('⚡');
+    if (this.buffs.damageBoostUntil > now) buffs.push('😡');
+    if (this.buffs.speedBoostUntil > now) buffs.push('💨');
+    if (this.buffs.invulnerableUntil > now) buffs.push('🛡️');
+    if (this.buffs.berserkUntil > now) buffs.push('🔥');
 
-    if (activeBuffs.length > 0) {
+    if (buffs.length > 0) {
       ctx.font = 'bold 14px monospace';
       ctx.textAlign = 'center';
       ctx.fillStyle = '#f1c40f';
-      ctx.fillText(activeBuffs.join(' '), this.canvasWidth / 2, 30);
+      ctx.fillText(buffs.join(' '), this.canvasWidth / 2, 30);
     }
 
-    // Banner de boss no centro-topo
     if (this.bossState.active && this.bossState.name) {
       ctx.save();
       ctx.font = 'bold 18px monospace';
@@ -2015,10 +2258,12 @@ export class GameEngineService {
     this.damageTexts = [];
     this.particles = [];
     this.moneyPickups = [];
+    this.diamondPickups = [];
     this.clones = [];
     this.availableWeapons.set([]);
     this.selectedCharacter.set(null);
     this.bossState = { active: false, name: '', level: 0, abilityCooldown: 0 };
+    this.maxWeaponSlots = 5;
     const dur1 = GameEngineService.waveDuration(1);
     this.state.set({
       status: 'menu',
@@ -2027,8 +2272,9 @@ export class GameEngineService {
       waveDuration: dur1,
       materials: 0,
       money: 0,
-      playerHp: 100,
-      playerMaxHp: 100,
+      diamonds: 0,
+      playerHp: 30,
+      playerMaxHp: 30,
       kills: 0,
       damageDealt: 0,
       autoAim: true,
@@ -2036,6 +2282,9 @@ export class GameEngineService {
       specialAbilityId: null,
       specialAbilityCooldown: 0,
       ownedRareItems: [],
+      ownedLegendaryItems: [],
+      upgrades: { ...this.defaultUpgrades },
+      hasRevive: false,
       screenShake: 0,
       bossActive: false,
       pausedFrom: undefined
@@ -2047,7 +2296,10 @@ export class GameEngineService {
     return GameEngineService.waveDuration(wave);
   }
 
-  // Expor listas para o template
+  // Getters para o template
   getSpecialAbilities() { return SPECIAL_ABILITIES; }
   getRareItems() { return RARE_ITEMS; }
+  getLegendaryItems() { return LEGENDARY_ITEMS; }
+  getUpgrades() { return UPGRADES; }
+  getCurrentWeapons(): Weapon[] { return this.currentWeapons; }
 }

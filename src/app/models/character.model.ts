@@ -63,16 +63,9 @@ export interface Character {
   lore: string;
 }
 
-// ─── NOVO: habilidade especial (slot E) comprável ───
 export type SpecialAbilityId =
-  | 'meteor'       // Chuva de meteoros
-  | 'blackhole'    // Buraco negro que puxa inimigos
-  | 'timeFreeze'   // Congela todos os inimigos
-  | 'healBurst'    // Cura total + invulnerabilidade
-  | 'thunderstorm' // Raio em cada inimigo
-  | 'nuke'         // Explosão massiva em toda tela
-  | 'clone'        // Invoca 2 clones que atiram
-  | 'berserk';     // +200% dano e cadência por 8s
+  | 'meteor' | 'blackhole' | 'timeFreeze' | 'healBurst'
+  | 'thunderstorm' | 'nuke' | 'clone' | 'berserk';
 
 export interface SpecialAbility {
   id: SpecialAbilityId;
@@ -80,19 +73,12 @@ export interface SpecialAbility {
   description: string;
   icon: string;
   cooldown: number;
-  price: number;   // em R$
+  price: number;
 }
 
-// ─── NOVO: item raro comprável ───
 export type RareItemId =
-  | 'vampirism'    // +5 lifesteal permanente
-  | 'overcharge'   // +50% dano global
-  | 'warpSpeed'    // +40% velocidade
-  | 'magnet'       // Puxa materiais e R$ próximos
-  | 'guardian'     // +5 armadura
-  | 'ghost'        // +25% esquiva
-  | 'duplicator'   // +1 projétil em todas as armas
-  | 'executioner'; // Inimigos abaixo de 15% HP morrem instantâneo
+  | 'vampirism' | 'overcharge' | 'warpSpeed' | 'magnet'
+  | 'guardian' | 'ghost' | 'duplicator' | 'executioner';
 
 export interface RareItem {
   id: RareItemId;
@@ -100,16 +86,63 @@ export interface RareItem {
   description: string;
   icon: string;
   price: number;
-  oneTime: boolean; // só pode comprar uma vez
+  oneTime: boolean;
 }
 
-// ─── NOVO: inimigo Goblin e Boss ───
+// ─── NOVO: Itens Lendários comprados com diamantes ───
+export type LegendaryItemId =
+  | 'diamondMagnet'    // Puxa todos os pickups
+  | 'perfectAim'       // 100% crítico
+  | 'infiniteEnergy'   // Sem cooldowns de habilidades
+  | 'soulHarvest'      // +50% materiais
+  | 'divineShield'     // Revive 1x por partida
+  | 'phoenixFeather'   // Regen 2% HP/s
+  | 'deathRay'         // +1 arma (7º slot)
+  | 'timeLord'         // +5s em cada onda
+  | 'elementalMaster'  // Armas aplicam queimadura + lentidão
+  | 'treasureHunter';  // Goblins aparecem 3x mais
+
+export interface LegendaryItem {
+  id: LegendaryItemId;
+  name: string;
+  description: string;
+  icon: string;
+  price: number;        // em diamantes
+  oneTime: boolean;
+}
+
+// ─── NOVO: Upgrades comprados com R$ ───
+export type UpgradeId =
+  | 'maxHp' | 'armor' | 'speed' | 'damage'
+  | 'attackSpeed' | 'harvesting' | 'critChance';
+
+export interface Upgrade {
+  id: UpgradeId;
+  name: string;
+  description: string;
+  icon: string;
+  basePrice: number;      // R$ custo inicial
+  priceScale: number;     // multiplicador por nível
+  maxLevel: number;
+  effectPerLevel: number; // quanto cada nível dá
+  unit: string;           // '+X HP', '+Y%', etc
+}
+
+// ─── NOVO: estado dos upgrades ───
+export interface UpgradeLevels {
+  maxHp: number;
+  armor: number;
+  speed: number;
+  damage: number;
+  attackSpeed: number;
+  harvesting: number;
+  critChance: number;
+}
+
 export type EnemyType =
   | 'normal' | 'fast' | 'tank'
-  | 'goblin'         // dropa R$
-  | 'boss_goblin'    // boss 10/20/30...
-  | 'boss_reaper'    // boss
-  | 'boss_titan';    // boss
+  | 'goblin'
+  | 'boss_goblin' | 'boss_reaper' | 'boss_titan';
 
 export interface Enemy {
   id: number;
@@ -125,12 +158,13 @@ export interface Enemy {
   burnTicks?: number;
   burnDamage?: number;
   slowUntil?: number;
-  frozenUntil?: number;   // NOVO: congelamento
-  isBoss?: boolean;       // NOVO
-  bossName?: string;      // NOVO
-  moneyDrop?: number;     // NOVO: R$ ao morrer
-  materialDrop?: number;  // NOVO
-  abilityTimer?: number;  // NOVO: timer para boss usar habilidades
+  frozenUntil?: number;
+  isBoss?: boolean;
+  bossName?: string;
+  moneyDrop?: number;
+  materialDrop?: number;
+  diamondDrop?: number;    // NOVO: drop de diamante
+  abilityTimer?: number;
 }
 
 export interface Bullet {
@@ -159,8 +193,18 @@ export interface Bullet {
   damageType?: 'fire' | 'ice' | 'lightning' | 'normal';
 }
 
-// ─── NOVO: pickup de dinheiro ───
 export interface MoneyPickup {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  value: number;
+  lifetime: number;
+}
+
+// ─── NOVO: pickup de diamante ───
+export interface DiamondPickup {
   id: number;
   x: number;
   y: number;
@@ -173,7 +217,7 @@ export interface MoneyPickup {
 export type ParticleKind =
   | 'spark' | 'smoke' | 'explosion' | 'heal'
   | 'ring' | 'lightning' | 'fire' | 'ice'
-  | 'money' | 'bossAura';
+  | 'money' | 'bossAura' | 'diamond';
 
 export interface Particle {
   id: number;
@@ -199,7 +243,8 @@ export interface DamageText {
   lifetime: number;
   vy: number;
   isCrit: boolean;
-  isMoney?: boolean;   // NOVO
+  isMoney?: boolean;
+  isDiamond?: boolean;
 }
 
 export interface AbilityCooldowns {
@@ -207,7 +252,8 @@ export interface AbilityCooldowns {
 }
 
 export type GameStatus =
-  | 'menu' | 'playing' | 'paused' | 'shop' | 'blackMarket' | 'gameover';
+  | 'menu' | 'playing' | 'paused' | 'shop'
+  | 'blackMarket' | 'legendaryShop' | 'replaceWeapon' | 'gameover';
 
 export interface GameState {
   status: GameStatus;
@@ -215,18 +261,25 @@ export interface GameState {
   timeLeft: number;
   waveDuration: number;
   materials: number;
-  money: number;                // NOVO: R$
+  money: number;
+  diamonds: number;              // NOVO: diamantes
   playerHp: number;
   playerMaxHp: number;
   kills: number;
   damageDealt: number;
   autoAim: boolean;
   abilityCooldowns: AbilityCooldowns;
-  specialAbilityId: SpecialAbilityId | null;  // NOVO
-  specialAbilityCooldown: number;              // NOVO
-  ownedRareItems: RareItemId[];                // NOVO
+  specialAbilityId: SpecialAbilityId | null;
+  specialAbilityCooldown: number;
+  ownedRareItems: RareItemId[];
+  ownedLegendaryItems: LegendaryItemId[];  // NOVO
+  upgrades: UpgradeLevels;                 // NOVO
+  hasRevive: boolean;                      // NOVO: revive do Anjo
   screenShake: number;
-  pausedFrom?: 'playing' | 'shop' | 'blackMarket';
-  bossActive: boolean;          // NOVO
-  bossName?: string;            // NOVO
+  pausedFrom?: 'playing' | 'shop' | 'blackMarket' | 'legendaryShop' | 'replaceWeapon';
+  bossActive: boolean;
+  bossName?: string;
+  // NOVO: controle de substituição de arma
+  pendingWeapon?: Weapon;
+  pendingWeaponPrice?: number;
 }
