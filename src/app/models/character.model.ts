@@ -283,3 +283,49 @@ export interface GameState {
   pendingWeapon?: Weapon;
   pendingWeaponPrice?: number;
 }
+
+// ═══════════════════════════════════════════════════════════
+// RANKING / ESTATÍSTICAS DE FIM DE JOGO
+// ═══════════════════════════════════════════════════════════
+
+export interface RankingEntry {
+  id: string;                    // timestamp único
+  date: number;                  // Date.now()
+  characterId: string;
+  characterName: string;
+  characterEmoji: string;
+  characterColor: string;
+  wave: number;
+  kills: number;
+  damageDealt: number;
+  materials: number;
+  money: number;
+  diamonds: number;
+  weapons: Weapon[];
+  characterAbilities: Ability[];
+  specialAbilityId: SpecialAbilityId | null;
+  ownedRareItems: RareItemId[];
+  ownedLegendaryItems: LegendaryItemId[];
+}
+
+export interface RunStats {
+  characterId: string;
+  characterName: string;
+  characterEmoji: string;
+  characterColor: string;
+  characterAccentColor: string;
+  wave: number;
+  kills: number;
+  damageDealt: number;
+  materials: number;
+  money: number;
+  diamonds: number;
+  timeSurvived: number;
+  weapons: Weapon[];
+  characterAbilities: Ability[];
+  specialAbilityId: SpecialAbilityId | null;
+  ownedRareItems: RareItemId[];
+  ownedLegendaryItems: LegendaryItemId[];
+  rankingPosition: number | null;   // posição no ranking (1-based) ou null
+  isNewRecord: boolean;
+}

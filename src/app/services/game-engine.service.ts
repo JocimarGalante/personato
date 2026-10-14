@@ -1,18 +1,21 @@
 import { Injectable, signal, DestroyRef, inject } from '@angular/core';
 import {
   Character, Enemy, Bullet, GameState, Weapon, CharacterStats,
-  DamageText, Particle, ParticleKind, GameStatus,
+  DamageText, Particle, ParticleKind,
   SpecialAbilityId, RareItemId, LegendaryItemId, UpgradeId,
-  UpgradeLevels, MoneyPickup, DiamondPickup
+  UpgradeLevels, MoneyPickup, DiamondPickup,
+  RankingEntry, RunStats
 } from '../models/character.model';
 import {
   WEAPONS, SPECIAL_ABILITIES, RARE_ITEMS,
   LEGENDARY_ITEMS, UPGRADES
 } from '../data/characters';
+import { RankingService } from './ranking.service';
 
 @Injectable({ providedIn: 'root' })
 export class GameEngineService {
   private destroyRef = inject(DestroyRef);
+  private rankingService = inject(RankingService);
 
   private canvas!: HTMLCanvasElement;
   private ctx!: CanvasRenderingContext2D;
@@ -34,14 +37,9 @@ export class GameEngineService {
     wave: 1,
     timeLeft: GameEngineService.waveDuration(1),
     waveDuration: GameEngineService.waveDuration(1),
-    materials: 0,
-    money: 0,
-    diamonds: 0,
-    playerHp: 30,
-    playerMaxHp: 30,
-    kills: 0,
-    damageDealt: 0,
-    autoAim: true,
+    materials: 0, money: 0, diamonds: 0,
+    playerHp: 30, playerMaxHp: 30,
+    kills: 0, damageDealt: 0, autoAim: true,
     abilityCooldowns: {},
     specialAbilityId: null,
     specialAbilityCooldown: 0,
@@ -55,11 +53,13 @@ export class GameEngineService {
 
   readonly selectedCharacter = signal<Character | null>(null);
   readonly availableWeapons = signal<Weapon[]>([]);
+  readonly lastRunStats = signal<RunStats | null>(null);
+  private runStartTime = 0;
 
   private playerX = 400;
   private playerY = 300;
   private playerStats!: CharacterStats;
-  private baseStats!: CharacterStats;         // stats base para recálculo
+  private baseStats!: CharacterStats;
   private currentWeapons: Weapon[] = [];
   private weaponCooldowns: number[] = [];
   private keys: Record<string, boolean> = {};
@@ -67,17 +67,7 @@ export class GameEngineService {
   private facingAngle = 0;
   private maxWeaponSlots = 5;
 
-  private buffs: {
-    critBoostUntil: number;
-    cadenceBoostUntil: number;
-    damageBoostUntil: number;
-    speedBoostUntil: number;
-    armorBoostUntil: number;
-    invulnerableUntil: number;
-    lifestealBoostUntil: number;
-    nextShotLethal: boolean;
-    berserkUntil: number;
-  } = {
+  private buffs = {
     critBoostUntil: 0, cadenceBoostUntil: 0, damageBoostUntil: 0,
     speedBoostUntil: 0, armorBoostUntil: 0, invulnerableUntil: 0,
     lifestealBoostUntil: 0, nextShotLethal: false, berserkUntil: 0
@@ -97,10 +87,7 @@ export class GameEngineService {
   private diamondIdCounter = 0;
 
   private clones: { x: number; y: number; expiresAt: number; cooldown: number }[] = [];
-
-  private bossState = {
-    active: false, name: '', level: 0, abilityCooldown: 0
-  };
+  private bossState = { active: false, name: '', level: 0, abilityCooldown: 0 };
 
   readonly canvasWidth = 800;
   readonly canvasHeight = 600;
@@ -164,10 +151,6 @@ export class GameEngineService {
     this.state.update(st => ({ ...st, autoAim: !st.autoAim }));
   }
 
-  // ═════════════════════════════════════════════════════════
-  // PAUSE
-  // ═════════════════════════════════════════════════════════
-
   pauseGame(): void {
     const s = this.state();
     if (s.status !== 'playing' && s.status !== 'shop' &&
@@ -192,16 +175,13 @@ export class GameEngineService {
     if (from === 'playing') this.startLoop();
   }
 
-  quitToMenu(): void {
-    this.restart();
-  }
-
-  // ═════════════════════════════════════════════════════════
-  // INÍCIO
-  // ═════════════════════════════════════════════════════════
+  quitToMenu(): void { this.restart(); }
 
   startGame(character: Character): void {
     this.selectedCharacter.set(character);
+    this.runStartTime = performance.now();
+    this.lastRunStats.set(null);
+
     this.baseStats = { ...character.stats };
     this.playerStats = { ...character.stats };
     this.currentWeapons = character.startingWeapons.map(w => ({ ...w }));
@@ -241,17 +221,11 @@ export class GameEngineService {
     const w1 = GameEngineService.waveDuration(1);
     this.state.set({
       status: 'playing',
-      wave: 1,
-      timeLeft: w1,
-      waveDuration: w1,
-      materials: 0,
-      money: 0,
-      diamonds: 0,
+      wave: 1, timeLeft: w1, waveDuration: w1,
+      materials: 0, money: 0, diamonds: 0,
       playerHp: this.playerStats.maxHp,
       playerMaxHp: this.playerStats.maxHp,
-      kills: 0,
-      damageDealt: 0,
-      autoAim: true,
+      kills: 0, damageDealt: 0, autoAim: true,
       abilityCooldowns: cooldowns,
       specialAbilityId: null,
       specialAbilityCooldown: 0,
@@ -288,10 +262,6 @@ export class GameEngineService {
     this.update(dt);
     this.render();
   };
-
-  // ═════════════════════════════════════════════════════════
-  // UPDATE
-  // ═════════════════════════════════════════════════════════
 
   private update(dt: number): void {
     const s = this.state();
@@ -378,10 +348,7 @@ export class GameEngineService {
       let nearestDist = Infinity;
       for (const e of this.enemies) {
         const d = Math.hypot(e.x - clone.x, e.y - clone.y);
-        if (d < nearestDist && d < 300) {
-          nearestDist = d;
-          nearest = e;
-        }
+        if (d < nearestDist && d < 300) { nearestDist = d; nearest = e; }
       }
       if (nearest) {
         const dx = nearest.x - clone.x;
@@ -569,7 +536,6 @@ export class GameEngineService {
       this.chainLightning(e, b, b.chainCount, b.chainRange);
     }
 
-    // Item lendário: Mestre Elemental
     const hasElemental = this.state().ownedLegendaryItems.includes('elementalMaster');
 
     if (b.damageType === 'fire' || hasElemental) {
@@ -618,7 +584,6 @@ export class GameEngineService {
     const items = this.state().ownedRareItems;
     const legendary = this.state().ownedLegendaryItems;
 
-    // Bônus de materiais
     let materialGain = 1;
     if (legendary.includes('soulHarvest')) materialGain *= 2;
 
@@ -628,7 +593,6 @@ export class GameEngineService {
       materials: s.materials + materialGain
     }));
 
-    // Drop de R$
     if (enemy.moneyDrop && enemy.moneyDrop > 0) {
       let dropAmount = enemy.moneyDrop;
       if (legendary.includes('treasureHunter')) dropAmount *= 2;
@@ -646,7 +610,6 @@ export class GameEngineService {
       }
     }
 
-    // Drop de diamantes (boss = 1 diamante garantido)
     if (enemy.diamondDrop && enemy.diamondDrop > 0) {
       for (let i = 0; i < enemy.diamondDrop; i++) {
         const angle = Math.random() * Math.PI * 2;
@@ -662,7 +625,6 @@ export class GameEngineService {
       }
     }
 
-    // Drop de diamante em bosses
     if (enemy.isBoss) {
       const diamondCount = 3 + Math.floor(this.state().wave / 10);
       for (let i = 0; i < diamondCount; i++) {
@@ -735,10 +697,6 @@ export class GameEngineService {
     if (isCrit) this.spawnParticle(enemy.x, enemy.y, 'ring');
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
-
-  // ═════════════════════════════════════════════════════════
-  // ARMAS
-  // ═════════════════════════════════════════════════════════
 
   private updateWeapons(dt: number, now: number): void {
     const charId = this.selectedCharacter()?.id;
@@ -841,7 +799,6 @@ export class GameEngineService {
 
     damage = Math.max(1, damage);
 
-    // Item lendário: Mira Perfeita
     let critChance = this.playerStats.critChance;
     if (this.state().ownedLegendaryItems.includes('perfectAim')) critChance = 1;
     if (this.buffs.critBoostUntil > now) critChance = Math.min(1, critChance + 0.5);
@@ -926,13 +883,8 @@ export class GameEngineService {
     }
   }
 
-  // ═════════════════════════════════════════════════════════
-  // HABILIDADES ATIVAS (Q)
-  // ═════════════════════════════════════════════════════════
-
   private updateAbilityCooldowns(dt: number): void {
     const s = this.state();
-    // Energia Infinita: sem cooldowns
     if (s.ownedLegendaryItems.includes('infiniteEnergy')) {
       const cleared: Record<string, number> = {};
       for (const id of Object.keys(s.abilityCooldowns)) cleared[id] = 0;
@@ -1032,10 +984,6 @@ export class GameEngineService {
       }
     }
   }
-
-  // ═════════════════════════════════════════════════════════
-  // HABILIDADE ESPECIAL (E)
-  // ═════════════════════════════════════════════════════════
 
   private updateSpecialCooldown(dt: number): void {
     const s = this.state();
@@ -1149,10 +1097,6 @@ export class GameEngineService {
     }
   }
 
-  // ═════════════════════════════════════════════════════════
-  // LOJAS
-  // ═════════════════════════════════════════════════════════
-
   openBlackMarket(): void {
     this.state.update(s => ({ ...s, status: 'blackMarket' }));
   }
@@ -1212,8 +1156,6 @@ export class GameEngineService {
     }
   }
 
-  // ─── LENDÁRIOS ───
-
   buyLegendaryItem(id: LegendaryItemId): boolean {
     const s = this.state();
     const item = LEGENDARY_ITEMS.find(i => i.id === id);
@@ -1232,23 +1174,12 @@ export class GameEngineService {
 
   private applyLegendaryEffect(id: LegendaryItemId): void {
     switch (id) {
-      case 'deathRay':
-        this.maxWeaponSlots = 7;
-        break;
-      case 'timeLord':
-        // será aplicado em endWave
-        break;
+      case 'deathRay': this.maxWeaponSlots = 7; break;
       case 'divineShield':
         this.state.update(s => ({ ...s, hasRevive: true }));
         break;
-      case 'soulHarvest':
-        // aplicado em killEnemy
-        break;
-      // Outros efeitos são tratados em runtime
     }
   }
-
-  // ─── UPGRADES ───
 
   getUpgradePrice(id: UpgradeId): number {
     const up = UPGRADES.find(u => u.id === id);
@@ -1268,10 +1199,8 @@ export class GameEngineService {
     const price = this.getUpgradePrice(id);
     if (s.money < price) return false;
 
-    // Aplicar efeito
     this.applyUpgrade(id, up.effectPerLevel);
 
-    // Atualizar nível e subtrair dinheiro
     const newUpgrades = { ...s.upgrades };
     newUpgrades[id] = currentLevel + 1;
 
@@ -1295,32 +1224,15 @@ export class GameEngineService {
           playerHp: Math.min(s.playerHp + effect, this.playerStats.maxHp)
         }));
         break;
-      case 'armor':
-        this.playerStats.armor += effect;
-        break;
-      case 'speed':
-        this.playerStats.speed += effect;
-        break;
-      case 'damage':
-        this.playerStats.damageMultiplier += effect;
-        break;
-      case 'attackSpeed':
-        this.playerStats.attackSpeed += effect;
-        break;
-      case 'harvesting':
-        this.playerStats.harvesting += effect;
-        break;
-      case 'critChance':
-        this.playerStats.critChance += effect;
-        break;
+      case 'armor': this.playerStats.armor += effect; break;
+      case 'speed': this.playerStats.speed += effect; break;
+      case 'damage': this.playerStats.damageMultiplier += effect; break;
+      case 'attackSpeed': this.playerStats.attackSpeed += effect; break;
+      case 'harvesting': this.playerStats.harvesting += effect; break;
+      case 'critChance': this.playerStats.critChance += effect; break;
     }
   }
 
-  // ═════════════════════════════════════════════════════════
-  // SUBSTITUIR ARMA
-  // ═════════════════════════════════════════════════════════
-
-  // Compra arma: se há espaço, adiciona; senão, abre diálogo
   tryBuyWeapon(weapon: Weapon): void {
     const s = this.state();
     const cost = 10 + s.wave * 2;
@@ -1331,7 +1243,6 @@ export class GameEngineService {
       this.currentWeapons.push({ ...weapon });
       this.weaponCooldowns.push(0);
     } else {
-      // Abrir diálogo de substituição
       this.state.update(st => ({
         ...st,
         status: 'replaceWeapon',
@@ -1375,15 +1286,10 @@ export class GameEngineService {
     this.state.update(st => ({ ...st, materials: st.materials + refund }));
   }
 
-  // Compatibilidade: buyWeapon → tryBuyWeapon
   buyWeapon(weapon: Weapon): boolean {
     this.tryBuyWeapon(weapon);
     return true;
   }
-
-  // ═════════════════════════════════════════════════════════
-  // INIMIGOS / TIMER / SPAWN
-  // ═════════════════════════════════════════════════════════
 
   private updateSpawning(dt: number): void {
     const s = this.state();
@@ -1399,11 +1305,9 @@ export class GameEngineService {
       return;
     }
 
-    // Dificuldade aumentada: spawn rate maior
     const spawnRate = 1.2 + s.wave * 0.22;
     if (Math.random() >= spawnRate * dt) return;
 
-    // Chance de goblin (com Treasure Hunter é 3x)
     let goblinChance = 0.025 + s.wave * 0.0025;
     if (s.ownedLegendaryItems.includes('treasureHunter')) goblinChance *= 3;
     if (Math.random() < goblinChance) {
@@ -1425,7 +1329,6 @@ export class GameEngineService {
       default: x = -margin; y = Math.random() * this.canvasHeight; break;
     }
 
-    // Dificuldade aumentada
     const roll = Math.random();
     let type: Enemy['type'] = 'normal';
     let hp = 20 + wave * 8;
@@ -1462,12 +1365,11 @@ export class GameEngineService {
     }
 
     const hp = 30 + wave * 10;
-    const isDiamondGoblin = Math.random() < 0.08; // 8% chance de goblin com diamante
+    const isDiamondGoblin = Math.random() < 0.08;
 
     this.enemies.push({
       id: this.enemyIdCounter++,
-      x, y,
-      hp, maxHp: hp,
+      x, y, hp, maxHp: hp,
       speed: 140 + wave * 4,
       damage: 3,
       radius: isDiamondGoblin ? 13 : 11,
@@ -1496,12 +1398,11 @@ export class GameEngineService {
     const hp = 900 + wave * 180;
     const speed = 45 + bossLevel * 6;
     const damage = 18 + bossLevel * 10;
-    const x = this.canvasWidth / 2;
-    const y = -80;
 
     this.enemies.push({
       id: this.enemyIdCounter++,
-      x, y, hp, maxHp: hp, speed, damage, radius, color,
+      x: this.canvasWidth / 2, y: -80,
+      hp, maxHp: hp, speed, damage, radius, color,
       type: bossType, isBoss: true, bossName,
       moneyDrop: 20 + bossLevel * 8,
       abilityTimer: 5
@@ -1514,18 +1415,6 @@ export class GameEngineService {
     this.state.update(s => ({
       ...s, bossActive: true, bossName, screenShake: 20
     }));
-
-    for (let i = 0; i < 30; i++) {
-      const angle = (i / 30) * Math.PI * 2;
-      this.particles.push({
-        id: this.particleIdCounter++,
-        x, y,
-        vx: Math.cos(angle) * 200,
-        vy: Math.sin(angle) * 200,
-        life: 1.2, maxLife: 1.2,
-        color, size: 6, kind: 'bossAura'
-      });
-    }
   }
 
   private updateMoneyPickups(dt: number): void {
@@ -1612,7 +1501,6 @@ export class GameEngineService {
     const newMaterials = s.materials + harvest;
     const nextWave = s.wave + 1;
 
-    // Senhor do Tempo: +10s em toda onda
     let waveTime = GameEngineService.waveDuration(nextWave);
     if (s.ownedLegendaryItems.includes('timeLord')) waveTime += 10;
 
@@ -1659,7 +1547,6 @@ export class GameEngineService {
     this.state.update(s => {
       const newHp = Math.max(0, s.playerHp - finalDamage);
       if (newHp <= 0) {
-        // Revive lendário
         if (s.hasRevive) {
           return {
             ...s,
@@ -1669,10 +1556,65 @@ export class GameEngineService {
           };
         }
         this.stopLoop();
+        this.finalizeRun();
         return { ...s, playerHp: 0, status: 'gameover' };
       }
       return { ...s, playerHp: newHp, screenShake: Math.max(s.screenShake, 4) };
     });
+  }
+
+  private finalizeRun(): void {
+    const s = this.state();
+    const char = this.selectedCharacter();
+    if (!char) return;
+
+    const timeSurvived = (performance.now() - this.runStartTime) / 1000;
+
+    const entry: RankingEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      date: Date.now(),
+      characterId: char.id,
+      characterName: char.name,
+      characterEmoji: char.emoji,
+      characterColor: char.color,
+      wave: s.wave,
+      kills: s.kills,
+      damageDealt: s.damageDealt,
+      materials: s.materials,
+      money: s.money,
+      diamonds: s.diamonds,
+      weapons: this.currentWeapons.map(w => ({ ...w })),
+      characterAbilities: char.abilities.map(a => ({ ...a })),
+      specialAbilityId: s.specialAbilityId,
+      ownedRareItems: [...s.ownedRareItems],
+      ownedLegendaryItems: [...s.ownedLegendaryItems]
+    };
+
+    const { position, isNewRecord } = this.rankingService.submit(entry);
+
+    const stats: RunStats = {
+      characterId: char.id,
+      characterName: char.name,
+      characterEmoji: char.emoji,
+      characterColor: char.color,
+      characterAccentColor: char.accentColor,
+      wave: s.wave,
+      kills: s.kills,
+      damageDealt: s.damageDealt,
+      materials: s.materials,
+      money: s.money,
+      diamonds: s.diamonds,
+      timeSurvived,
+      weapons: this.currentWeapons.map(w => ({ ...w })),
+      characterAbilities: char.abilities.map(a => ({ ...a })),
+      specialAbilityId: s.specialAbilityId,
+      ownedRareItems: [...s.ownedRareItems],
+      ownedLegendaryItems: [...s.ownedLegendaryItems],
+      rankingPosition: position,
+      isNewRecord
+    };
+
+    this.lastRunStats.set(stats);
   }
 
   private applyRegen(dt: number): void {
@@ -1702,10 +1644,6 @@ export class GameEngineService {
       return { ...s, playerHp: newHp };
     });
   }
-
-  // ═════════════════════════════════════════════════════════
-  // PARTÍCULAS
-  // ═════════════════════════════════════════════════════════
 
   private spawnParticle(x: number, y: number, kind: ParticleKind): void {
     const colors: Record<ParticleKind, string> = {
@@ -1812,10 +1750,6 @@ export class GameEngineService {
     }
   }
 
-  // ═════════════════════════════════════════════════════════
-  // LOJA PADRÃO
-  // ═════════════════════════════════════════════════════════
-
   private generateShopWeapons(): Weapon[] {
     const pool = Object.values(WEAPONS);
     const result: Weapon[] = [];
@@ -1831,10 +1765,6 @@ export class GameEngineService {
     this.state.update(s => ({ ...s, status: 'playing' }));
     this.startLoop();
   }
-
-  // ═════════════════════════════════════════════════════════
-  // RENDER
-  // ═════════════════════════════════════════════════════════
 
   private render(): void {
     if (!this.ctx) return;
@@ -1877,7 +1807,6 @@ export class GameEngineService {
 
     this.renderParticles(ctx, 'behind');
 
-    // Diamantes
     for (const p of this.diamondPickups) {
       const pulse = 1 + Math.sin(performance.now() / 150) * 0.2;
       ctx.save();
@@ -1899,7 +1828,6 @@ export class GameEngineService {
       ctx.restore();
     }
 
-    // R$
     for (const p of this.moneyPickups) {
       const pulse = 1 + Math.sin(performance.now() / 200) * 0.15;
       ctx.beginPath();
@@ -1917,7 +1845,6 @@ export class GameEngineService {
       ctx.fillText('R$', p.x, p.y);
     }
 
-    // Inimigos
     for (const enemy of this.enemies) {
       if (enemy.isBoss) {
         ctx.save();
@@ -2107,7 +2034,6 @@ export class GameEngineService {
   }
 
   private renderHUD(ctx: CanvasRenderingContext2D, s: GameState): void {
-    // HP
     const hpRatio = s.playerHp / s.playerMaxHp;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(10, 10, 200, 20);
@@ -2123,20 +2049,17 @@ export class GameEngineService {
     ctx.textBaseline = 'middle';
     ctx.fillText(`${Math.ceil(s.playerHp)}/${Math.ceil(s.playerMaxHp)}`, 16, 20);
 
-    // Onda e tempo
     ctx.font = 'bold 16px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(`Onda ${s.wave}`, this.canvasWidth - 20, 20);
     ctx.fillText(`⏱ ${Math.ceil(s.timeLeft)}s`, this.canvasWidth - 20, 45);
 
-    // Barra de progresso
     const prog = 1 - (s.timeLeft / s.waveDuration);
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(this.canvasWidth - 200, 60, 180, 6);
     ctx.fillStyle = '#4ecdc4';
     ctx.fillRect(this.canvasWidth - 200, 60, 180 * prog, 6);
 
-    // Recursos
     ctx.textAlign = 'left';
     ctx.fillStyle = '#f1c40f';
     ctx.font = 'bold 13px monospace';
@@ -2150,20 +2073,17 @@ export class GameEngineService {
     ctx.font = 'bold 15px monospace';
     ctx.fillText(`💠 ${s.diamonds}`, 10, 100);
 
-    // Armas
     ctx.font = '20px sans-serif';
     ctx.textBaseline = 'middle';
     for (let i = 0; i < this.currentWeapons.length; i++) {
       ctx.fillText(this.currentWeapons[i].icon, 16 + i * 28, 128);
     }
 
-    // Auto-aim
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'left';
     ctx.fillStyle = s.autoAim ? '#2ecc71' : '#e74c3c';
     ctx.fillText(s.autoAim ? '● AUTO' : '○ MANUAL [ESPAÇO]', 10, 158);
 
-    // Habilidades Q e E
     const char = this.selectedCharacter();
     let hudY = 175;
     if (char) {
@@ -2208,7 +2128,6 @@ export class GameEngineService {
       }
     }
 
-    // Buffs
     const now = performance.now() / 1000;
     const buffs: string[] = [];
     if (this.buffs.critBoostUntil > now) buffs.push('🎯');
@@ -2262,22 +2181,16 @@ export class GameEngineService {
     this.clones = [];
     this.availableWeapons.set([]);
     this.selectedCharacter.set(null);
+    this.lastRunStats.set(null);
     this.bossState = { active: false, name: '', level: 0, abilityCooldown: 0 };
     this.maxWeaponSlots = 5;
     const dur1 = GameEngineService.waveDuration(1);
     this.state.set({
       status: 'menu',
-      wave: 1,
-      timeLeft: dur1,
-      waveDuration: dur1,
-      materials: 0,
-      money: 0,
-      diamonds: 0,
-      playerHp: 30,
-      playerMaxHp: 30,
-      kills: 0,
-      damageDealt: 0,
-      autoAim: true,
+      wave: 1, timeLeft: dur1, waveDuration: dur1,
+      materials: 0, money: 0, diamonds: 0,
+      playerHp: 30, playerMaxHp: 30,
+      kills: 0, damageDealt: 0, autoAim: true,
       abilityCooldowns: {},
       specialAbilityId: null,
       specialAbilityCooldown: 0,
@@ -2296,7 +2209,6 @@ export class GameEngineService {
     return GameEngineService.waveDuration(wave);
   }
 
-  // Getters para o template
   getSpecialAbilities() { return SPECIAL_ABILITIES; }
   getRareItems() { return RARE_ITEMS; }
   getLegendaryItems() { return LEGENDARY_ITEMS; }

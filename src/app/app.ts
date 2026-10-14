@@ -2,6 +2,7 @@ import {
   Component, inject, viewChild, ElementRef, afterNextRender
 } from '@angular/core';
 import { GameEngineService } from './services/game-engine.service';
+import { RankingService } from './services/ranking.service';
 import {
   CHARACTERS, SPECIAL_ABILITIES, RARE_ITEMS,
   LEGENDARY_ITEMS, UPGRADES
@@ -83,7 +84,6 @@ import {
             <p class="boss-warning">⚠️ A PRÓXIMA ONDA É DE BOSS ⚠️</p>
           }
 
-          <!-- MINHAS ARMAS -->
           <div class="my-weapons">
             <div class="my-weapons-title">
               🎒 Suas Armas ({{ getCurrentWeapons().length }}/{{ getMaxWeaponSlots() }})
@@ -194,7 +194,6 @@ import {
             <span class="resource money big">💰 R$ {{ state().money }}</span>
           </div>
 
-          <!-- UPGRADES -->
           <div class="market-section">
             <h3>📈 Upgrades (custo aumenta a cada nível)</h3>
             <p class="section-hint">Use R$ para evoluir permanentemente seus atributos.</p>
@@ -227,7 +226,6 @@ import {
             </div>
           </div>
 
-          <!-- ITENS RAROS -->
           <div class="market-section">
             <h3>💎 Itens Raros (R$)</h3>
             <div class="market-grid">
@@ -253,7 +251,6 @@ import {
             </div>
           </div>
 
-          <!-- HABILIDADES ESPECIAIS -->
           <div class="market-section">
             <h3>⚡ Habilidade Especial (tecla E)</h3>
             <div class="market-grid">
@@ -285,7 +282,7 @@ import {
         </div>
       }
 
-      <!-- LOJA LENDÁRIA (DIAMANTES) -->
+      <!-- LOJA LENDÁRIA -->
       @if (state().status === 'legendaryShop') {
         <div class="legendary-overlay">
           <h2 class="legendary-title">💠 Loja Lendária</h2>
@@ -356,15 +353,239 @@ import {
         </div>
       }
 
-      <!-- GAME OVER -->
-      @if (state().status === 'gameover') {
-        <div class="overlay">
-          <h1 class="gameover-title">💀 Derrota</h1>
-          <p>Onda alcançada: {{ state().wave }}</p>
-          <p>Inimigos derrotados: {{ state().kills }}</p>
-          <p>Dano total: {{ state().damageDealt }}</p>
-          <p class="money-summary">💰 R$ {{ state().money }} • 💠 {{ state().diamonds }} diamantes</p>
-          <button class="btn-restart" (click)="restart()">Jogar de novo</button>
+      <!-- GAME OVER COM RANKING -->
+      @if (state().status === 'gameover' && lastRunStats()) {
+        <div class="gameover-overlay">
+          <div class="gameover-content">
+
+            <header class="go-header">
+              <div class="go-skull">💀</div>
+              <h1 class="go-title">FIM DE JOGO</h1>
+              <p class="go-subtitle">
+                Sua jornada terminou na onda {{ lastRunStats()!.wave }}
+              </p>
+            </header>
+
+            @if (lastRunStats()!.rankingPosition) {
+              <div
+                class="rank-badge"
+                [class.top-1]="lastRunStats()!.rankingPosition === 1"
+                [class.top-2]="lastRunStats()!.rankingPosition === 2"
+                [class.top-3]="lastRunStats()!.rankingPosition === 3"
+              >
+                <span class="rank-medal">{{ getRankMedal(lastRunStats()!.rankingPosition!) }}</span>
+                <span class="rank-text">
+                  @if (lastRunStats()!.isNewRecord) {
+                    🎉 NOVO RECORDE! 🎉
+                  } @else {
+                    Você ficou em <strong>{{ lastRunStats()!.rankingPosition }}º lugar</strong> no ranking!
+                  }
+                </span>
+              </div>
+            }
+
+            <div class="go-character" [style.border-color]="lastRunStats()!.characterColor">
+              <div
+                class="go-char-emoji"
+                [style.background]="lastRunStats()!.characterColor + '22'"
+              >
+                {{ lastRunStats()!.characterEmoji }}
+              </div>
+              <div class="go-char-info">
+                <div class="go-char-name" [style.color]="lastRunStats()!.characterColor">
+                  {{ lastRunStats()!.characterName }}
+                </div>
+                <div class="go-char-time">
+                  ⏱ Sobreviveu por {{ formatTime(lastRunStats()!.timeSurvived) }}
+                </div>
+              </div>
+            </div>
+
+            <div class="go-stats">
+              <div class="go-stat wave-stat">
+                <div class="go-stat-icon">🌊</div>
+                <div class="go-stat-value">{{ lastRunStats()!.wave }}</div>
+                <div class="go-stat-label">Onda</div>
+              </div>
+              <div class="go-stat kills-stat">
+                <div class="go-stat-icon">⚔️</div>
+                <div class="go-stat-value">{{ lastRunStats()!.kills }}</div>
+                <div class="go-stat-label">Abates</div>
+              </div>
+              <div class="go-stat damage-stat">
+                <div class="go-stat-icon">💥</div>
+                <div class="go-stat-value">{{ formatNumber(lastRunStats()!.damageDealt) }}</div>
+                <div class="go-stat-label">Dano Total</div>
+              </div>
+            </div>
+
+            <div class="go-resources">
+              <div class="go-resource">
+                <span class="res-icon">💎</span>
+                <span class="res-value">{{ lastRunStats()!.materials }}</span>
+                <span class="res-label">Materiais</span>
+              </div>
+              <div class="go-resource">
+                <span class="res-icon">💰</span>
+                <span class="res-value">{{ lastRunStats()!.money }}</span>
+                <span class="res-label">Dinheiro</span>
+              </div>
+              <div class="go-resource">
+                <span class="res-icon">💠</span>
+                <span class="res-value">{{ lastRunStats()!.diamonds }}</span>
+                <span class="res-label">Diamantes</span>
+              </div>
+            </div>
+
+            <div class="go-details">
+
+              <section class="go-section weapons-section">
+                <h3 class="go-section-title">
+                  🔫 Armas Utilizadas
+                  <span class="go-section-count">{{ lastRunStats()!.weapons.length }}</span>
+                </h3>
+                <div class="go-weapon-list">
+                  @for (weapon of lastRunStats()!.weapons; track $index) {
+                    <div class="go-weapon" [style.border-color]="weapon.color">
+                      <div class="go-weapon-icon">{{ weapon.icon }}</div>
+                      <div class="go-weapon-info">
+                        <div class="go-weapon-name">{{ weapon.name }}</div>
+                        <div class="go-weapon-stat">
+                          Dano {{ weapon.damage }} • {{ getBehaviorLabel(weapon) }}
+                        </div>
+                      </div>
+                    </div>
+                  }
+                  @if (lastRunStats()!.weapons.length === 0) {
+                    <p class="go-empty">Nenhuma arma</p>
+                  }
+                </div>
+              </section>
+
+              <section class="go-section abilities-section">
+                <h3 class="go-section-title">
+                  ⚡ Habilidades do Personagem
+                </h3>
+                <div class="go-ability-list">
+                  @for (ability of lastRunStats()!.characterAbilities; track ability.id) {
+                    <div
+                      class="go-ability"
+                      [class.go-ability-active]="ability.trigger === 'active'"
+                    >
+                      <span class="go-ability-icon">{{ ability.icon }}</span>
+                      <div class="go-ability-info">
+                        <div class="go-ability-name">
+                          @if (ability.trigger === 'active') {
+                            <kbd class="key-badge">{{ ability.key }}</kbd>
+                          }
+                          {{ ability.name }}
+                        </div>
+                        <div class="go-ability-desc">{{ ability.description }}</div>
+                      </div>
+                    </div>
+                  }
+                </div>
+
+                @if (lastRunStats()!.specialAbilityId) {
+                  <h4 class="go-subsection-title">🌟 Habilidade Especial (E)</h4>
+                  <div class="go-special-ability">
+                    <span class="go-ability-icon">{{ getSpecialAbilityIcon(lastRunStats()!.specialAbilityId!) }}</span>
+                    <div class="go-ability-info">
+                      <div class="go-ability-name">
+                        {{ getSpecialAbilityName(lastRunStats()!.specialAbilityId!) }}
+                      </div>
+                      <div class="go-ability-desc">
+                        {{ getSpecialAbilityDescription(lastRunStats()!.specialAbilityId!) }}
+                      </div>
+                    </div>
+                  </div>
+                }
+              </section>
+
+              @if (lastRunStats()!.ownedRareItems.length > 0 || lastRunStats()!.ownedLegendaryItems.length > 0) {
+                <section class="go-section items-section">
+                  <h3 class="go-section-title">
+                    🎒 Itens Adquiridos
+                  </h3>
+
+                  @if (lastRunStats()!.ownedRareItems.length > 0) {
+                    <h4 class="go-subsection-title">💎 Raros</h4>
+                    <div class="go-item-grid">
+                      @for (itemId of lastRunStats()!.ownedRareItems; track itemId) {
+                        <div class="go-item go-item-rare">
+                          <span class="go-item-icon">{{ getRareItemIcon(itemId) }}</span>
+                          <span class="go-item-name">{{ getRareItemName(itemId) }}</span>
+                        </div>
+                      }
+                    </div>
+                  }
+
+                  @if (lastRunStats()!.ownedLegendaryItems.length > 0) {
+                    <h4 class="go-subsection-title">💠 Lendários</h4>
+                    <div class="go-item-grid">
+                      @for (itemId of lastRunStats()!.ownedLegendaryItems; track itemId) {
+                        <div class="go-item go-item-legendary">
+                          <span class="go-item-icon">{{ getLegendaryItemIcon(itemId) }}</span>
+                          <span class="go-item-name">{{ getLegendaryItemName(itemId) }}</span>
+                        </div>
+                      }
+                    </div>
+                  }
+                </section>
+              }
+            </div>
+
+            <section class="ranking-section">
+              <h3 class="ranking-title">
+                🏆 Ranking Global — Top 5
+              </h3>
+              <div class="ranking-table">
+                <div class="ranking-header">
+                  <span class="rk-pos">#</span>
+                  <span class="rk-char">Personagem</span>
+                  <span class="rk-wave">Onda</span>
+                  <span class="rk-kills">Abates</span>
+                  <span class="rk-damage">Dano</span>
+                  <span class="rk-date">Data</span>
+                </div>
+                @for (entry of rankings(); track entry.id; let i = $index) {
+                  <div
+                    class="ranking-row"
+                    [class.ranking-top1]="i === 0"
+                    [class.ranking-top2]="i === 1"
+                    [class.ranking-top3]="i === 2"
+                  >
+                    <span class="rk-pos">
+                      <span class="rk-medal">{{ getRankMedal(i + 1) }}</span>
+                    </span>
+                    <span class="rk-char">
+                      <span class="rk-emoji">{{ entry.characterEmoji }}</span>
+                      <span class="rk-name" [style.color]="entry.characterColor">
+                        {{ entry.characterName }}
+                      </span>
+                    </span>
+                    <span class="rk-wave">{{ entry.wave }}</span>
+                    <span class="rk-kills">{{ entry.kills }}</span>
+                    <span class="rk-damage">{{ formatNumber(entry.damageDealt) }}</span>
+                    <span class="rk-date">{{ rankingService.formatDate(entry.date) }}</span>
+                  </div>
+                }
+                @if (rankings().length === 0) {
+                  <p class="ranking-empty">Nenhuma partida registrada ainda.</p>
+                }
+              </div>
+            </section>
+
+            <div class="go-actions">
+              <button class="btn-restart" (click)="restart()">
+                🎮 Jogar de Novo
+              </button>
+              <button class="btn-secondary" (click)="quitToMenu()">
+                🏠 Menu Principal
+              </button>
+            </div>
+
+          </div>
         </div>
       }
 
@@ -380,7 +601,7 @@ import {
       padding: clamp(12px, 2vw, 32px);
     }
 
-    /* MENU */
+    /* ═══ MENU ═══ */
     .menu-screen {
       display: flex; flex-direction: column; align-items: center;
       width: 100%; max-width: min(1400px, 100%);
@@ -444,7 +665,7 @@ import {
       display: flex; align-items: center; justify-content: center; font-size: 16px;
     }
 
-    /* CANVAS */
+    /* ═══ CANVAS ═══ */
     .canvas-wrapper {
       display: flex; align-items: center; justify-content: center;
       width: 100%; padding: clamp(8px, 1.5vw, 24px);
@@ -459,8 +680,8 @@ import {
       max-height: calc(100vh - 80px);
     }
 
-    /* OVERLAYS */
-    .shop-overlay, .overlay, .pause-overlay, .market-overlay,
+    /* ═══ OVERLAYS GERAIS ═══ */
+    .shop-overlay, .pause-overlay, .market-overlay,
     .legendary-overlay, .replace-overlay {
       position: fixed; inset: 0;
       background: rgba(15, 15, 26, 0.96);
@@ -487,7 +708,6 @@ import {
       background: linear-gradient(135deg, #00ffff, #8e44ad, #f1c40f);
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent; text-align: center;
-      text-shadow: 0 0 40px rgba(0, 255, 255, 0.3);
       letter-spacing: 3px; font-weight: 900;
     }
     .legendary-subtitle {
@@ -525,7 +745,6 @@ import {
     }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-    /* MINHAS ARMAS */
     .my-weapons {
       background: rgba(30, 30, 50, 0.6);
       border: 1px solid #333; border-radius: 10px;
@@ -557,7 +776,6 @@ import {
     }
     .sell-btn:hover { background: #e74c3c; color: #fff; }
 
-    /* SHOP ITEMS */
     .shop-items {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 220px));
       gap: clamp(10px, 1.4vw, 18px); margin: 10px 0;
@@ -589,7 +807,7 @@ import {
       display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
     }
 
-    /* MARKET / UPGRADES */
+    /* ═══ MERCADO NEGRO ═══ */
     .market-sections, .market-section {
       display: flex; flex-direction: column;
       gap: 10px; width: 100%; max-width: 1100px;
@@ -647,7 +865,6 @@ import {
     .equipped-badge { background: #f1c40f; }
     .owned-badge { background: #2ecc71; }
 
-    /* UPGRADES */
     .upgrade-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -695,7 +912,6 @@ import {
       font-weight: bold; white-space: nowrap;
     }
 
-    /* LOJA LENDÁRIA */
     .legendary-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -725,8 +941,7 @@ import {
       opacity: 0.5; cursor: not-allowed;
     }
     .legendary-glow {
-      position: absolute;
-      inset: 0;
+      position: absolute; inset: 0;
       background: radial-gradient(circle at 50% 0%, rgba(0, 255, 255, 0.15), transparent 70%);
       pointer-events: none;
     }
@@ -759,7 +974,6 @@ import {
       font-size: 12px; letter-spacing: 1px;
     }
 
-    /* REPLACE WEAPON */
     .replace-grid {
       display: flex; gap: 12px; flex-wrap: wrap;
       justify-content: center; max-width: 1000px;
@@ -779,7 +993,7 @@ import {
     .replace-name { font-weight: bold; font-size: 13px; color: #eee; }
     .replace-hint { font-size: 10px; color: #777; margin-top: 4px; }
 
-    /* PAUSE */
+    /* ═══ PAUSE ═══ */
     .pause-title {
       font-size: clamp(36px, 5vw, 64px); font-weight: 900;
       color: #4ecdc4; margin: 0; letter-spacing: 4px;
@@ -804,7 +1018,7 @@ import {
     }
     .pause-hint { color: #444; font-size: 12px; font-style: italic; }
 
-    /* BOTÕES */
+    /* ═══ BOTÕES ═══ */
     .btn-continue, .btn-restart, .btn-secondary, .btn-market, .btn-legendary {
       border: none; border-radius: 8px; font-weight: bold;
       cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;
@@ -842,20 +1056,380 @@ import {
       box-shadow: 0 0 30px rgba(0, 255, 255, 0.6);
     }
 
-    .gameover-title {
-      font-size: clamp(32px, 5vw, 56px); color: #e74c3c;
-      margin: 0; text-align: center;
-    }
-    .money-summary {
-      color: #00ffff !important; font-weight: bold;
-      font-size: clamp(14px, 1.3vw, 18px) !important;
-    }
-    .overlay p {
-      margin: 4px 0; color: #ccc;
-      font-size: clamp(14px, 1.2vw, 17px); text-align: center;
+    /* ═══════════════════════════════════════════════
+       GAME OVER — RANKING
+       ═══════════════════════════════════════════════ */
+
+    .gameover-overlay {
+      position: fixed; inset: 0;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(231, 76, 60, 0.15), transparent 50%),
+        linear-gradient(180deg, #0a0510 0%, #150a20 100%);
+      overflow-y: auto;
+      z-index: 20;
+      padding: clamp(12px, 2vw, 32px);
+      animation: fadeIn 0.4s ease;
     }
 
-    /* MOBILE */
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .gameover-content {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: clamp(14px, 2vh, 22px);
+      padding-bottom: 40px;
+    }
+
+    .go-header { text-align: center; padding: 8px 0; }
+
+    .go-skull {
+      font-size: clamp(48px, 7vw, 84px);
+      line-height: 1; margin-bottom: 4px;
+      animation: floatSkull 3s ease-in-out infinite;
+      filter: drop-shadow(0 0 20px rgba(231, 76, 60, 0.6));
+    }
+    @keyframes floatSkull {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .go-title {
+      font-size: clamp(28px, 4.5vw, 52px);
+      font-weight: 900; margin: 0;
+      background: linear-gradient(135deg, #e74c3c, #c0392b, #8e44ad);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 4px;
+    }
+    .go-subtitle {
+      color: #a09a8a; margin: 4px 0 0 0;
+      font-size: clamp(12px, 1.1vw, 15px);
+    }
+
+    .rank-badge {
+      display: flex; align-items: center; justify-content: center;
+      gap: 12px;
+      padding: clamp(12px, 1.5vw, 18px) clamp(20px, 3vw, 36px);
+      background: linear-gradient(135deg, #1a1a2e, #2a1a30);
+      border: 2px solid #444;
+      border-radius: 14px;
+      margin: 0 auto;
+      max-width: 700px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .rank-badge.top-1 {
+      border-color: #f1c40f;
+      box-shadow: 0 0 40px rgba(241, 196, 15, 0.5), 0 8px 30px rgba(0,0,0,0.4);
+      background: linear-gradient(135deg, #2a2010, #3a2a10);
+    }
+    .rank-badge.top-2 {
+      border-color: #bdc3c7;
+      box-shadow: 0 0 30px rgba(189, 195, 199, 0.4), 0 8px 30px rgba(0,0,0,0.4);
+    }
+    .rank-badge.top-3 {
+      border-color: #cd7f32;
+      box-shadow: 0 0 25px rgba(205, 127, 50, 0.4), 0 8px 30px rgba(0,0,0,0.4);
+    }
+    .rank-medal { font-size: clamp(32px, 4vw, 48px); line-height: 1; }
+    .rank-text {
+      font-size: clamp(14px, 1.4vw, 18px);
+      font-weight: 700; color: #fff; text-align: center;
+    }
+
+    .go-character {
+      display: flex; align-items: center; gap: 16px;
+      padding: clamp(12px, 1.5vw, 18px);
+      background: rgba(20, 20, 35, 0.7);
+      border: 2px solid #333; border-radius: 14px;
+      backdrop-filter: blur(8px);
+    }
+    .go-char-emoji {
+      width: clamp(56px, 6vw, 72px);
+      height: clamp(56px, 6vw, 72px);
+      display: flex; align-items: center; justify-content: center;
+      font-size: clamp(30px, 3.4vw, 40px);
+      border-radius: 14px; flex-shrink: 0;
+    }
+    .go-char-info { display: flex; flex-direction: column; gap: 4px; }
+    .go-char-name { font-size: clamp(18px, 1.8vw, 24px); font-weight: 800; }
+    .go-char-time { color: #888; font-size: clamp(11px, 1vw, 13px); }
+
+    .go-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .go-stat {
+      background: linear-gradient(160deg, #1a1a2e, #16162a);
+      border: 2px solid #333; border-radius: 12px;
+      padding: clamp(14px, 1.6vw, 20px);
+      text-align: center; position: relative; overflow: hidden;
+    }
+    .go-stat::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(circle at 50% 0%, currentColor, transparent 70%);
+      opacity: 0.08; pointer-events: none;
+    }
+    .wave-stat { color: #4ecdc4; }
+    .kills-stat { color: #e74c3c; }
+    .damage-stat { color: #ff8c00; }
+    .go-stat-icon { font-size: clamp(22px, 2.4vw, 30px); margin-bottom: 4px; }
+    .go-stat-value {
+      font-size: clamp(24px, 3vw, 38px);
+      font-weight: 900; font-family: monospace;
+      color: currentColor; line-height: 1;
+    }
+    .go-stat-label {
+      font-size: clamp(10px, 0.9vw, 12px); color: #888;
+      text-transform: uppercase; letter-spacing: 1.5px;
+      margin-top: 6px;
+    }
+
+    .go-resources {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 12px;
+      background: rgba(20, 20, 35, 0.5);
+      border: 1px solid #2a2a45;
+      border-radius: 12px;
+    }
+    .go-resource {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 2px; padding: 8px;
+    }
+    .res-icon { font-size: clamp(20px, 2vw, 26px); }
+    .res-value {
+      font-size: clamp(16px, 1.6vw, 22px);
+      font-weight: 900; font-family: monospace;
+      color: #f1c40f;
+    }
+    .res-label {
+      font-size: 10px; color: #666;
+      text-transform: uppercase; letter-spacing: 1px;
+    }
+
+    .go-details {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 800px) {
+      .go-details { grid-template-columns: 1fr; }
+    }
+
+    .go-section {
+      background: rgba(20, 20, 35, 0.7);
+      border: 2px solid #2a2a45;
+      border-radius: 14px;
+      padding: clamp(14px, 1.5vw, 20px);
+      backdrop-filter: blur(8px);
+    }
+    .go-section-title {
+      font-size: clamp(13px, 1.2vw, 16px);
+      color: #eee; margin: 0 0 12px 0;
+      display: flex; align-items: center; gap: 8px;
+      letter-spacing: 0.5px;
+    }
+    .go-section-count {
+      background: #4ecdc4; color: #0f0f1a;
+      font-size: 11px; font-weight: bold;
+      padding: 2px 8px; border-radius: 10px;
+      margin-left: auto;
+    }
+    .go-subsection-title {
+      font-size: 11px; color: #888;
+      text-transform: uppercase; letter-spacing: 1.5px;
+      margin: 12px 0 8px 0;
+    }
+
+    .go-weapon-list {
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .go-weapon {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px;
+      background: #1a1a2e; border: 2px solid #333;
+      border-radius: 8px;
+    }
+    .go-weapon-icon { font-size: 22px; flex-shrink: 0; }
+    .go-weapon-info { display: flex; flex-direction: column; gap: 2px; }
+    .go-weapon-name { font-weight: 700; font-size: 13px; color: #eee; }
+    .go-weapon-stat { font-size: 10.5px; color: #888; }
+
+    .go-ability-list {
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .go-ability {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 8px 10px;
+      background: #1a1a2e;
+      border-left: 3px solid #444;
+      border-radius: 6px;
+    }
+    .go-ability.go-ability-active {
+      border-left-color: #f39c12;
+      background: #2a2a18;
+    }
+    .go-ability-icon { font-size: 20px; flex-shrink: 0; }
+    .go-ability-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .go-ability-name {
+      font-weight: 700; font-size: 13px; color: #eee;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .go-ability-desc { font-size: 11px; color: #888; line-height: 1.4; }
+    .key-badge {
+      background: #f39c12; color: #0f0f1a;
+      font-family: monospace; font-weight: 900;
+      font-size: 10px; padding: 1px 6px;
+      border-radius: 4px; border: none;
+    }
+
+    .go-special-ability {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px;
+      background: linear-gradient(135deg, #2a2a1a, #3a3a18);
+      border: 2px solid #f1c40f;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(241, 196, 15, 0.15);
+    }
+
+    .go-item-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .go-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .go-item-rare {
+      background: #1a1a2e;
+      border: 2px solid #8e44ad;
+      color: #ccc;
+    }
+    .go-item-legendary {
+      background: linear-gradient(135deg, #0f0a25, #1a1040);
+      border: 2px solid #00ffff;
+      color: #d0f0ff;
+      box-shadow: 0 0 12px rgba(0, 255, 255, 0.2);
+    }
+    .go-item-icon { font-size: 18px; }
+    .go-item-name { flex: 1; }
+
+    .ranking-section {
+      background: rgba(20, 20, 35, 0.7);
+      border: 2px solid #2a2a45;
+      border-radius: 14px;
+      padding: clamp(14px, 1.5vw, 20px);
+      backdrop-filter: blur(8px);
+    }
+    .ranking-title {
+      font-size: clamp(15px, 1.4vw, 19px);
+      color: #f1c40f; margin: 0 0 12px 0;
+      text-align: center; letter-spacing: 1px;
+    }
+
+    .ranking-table {
+      display: flex; flex-direction: column; gap: 4px;
+      font-family: 'Segoe UI', sans-serif;
+      min-width: 500px;
+    }
+    .ranking-header, .ranking-row {
+      display: grid;
+      grid-template-columns: 50px 1.5fr 60px 70px 80px 90px;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+    }
+    .ranking-header {
+      font-size: 10px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-weight: 700;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+    }
+    .ranking-row {
+      background: #1a1a2e;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .ranking-row.ranking-top1 {
+      background: linear-gradient(135deg, #2a2010, #3a2a10);
+      border-color: #f1c40f;
+      box-shadow: 0 0 20px rgba(241, 196, 15, 0.3);
+    }
+    .ranking-row.ranking-top2 {
+      background: linear-gradient(135deg, #202028, #2a2a35);
+      border-color: #bdc3c7;
+    }
+    .ranking-row.ranking-top3 {
+      background: linear-gradient(135deg, #2a1a10, #3a2418);
+      border-color: #cd7f32;
+    }
+
+    .rk-pos {
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rk-medal { font-size: 20px; line-height: 1; }
+    .rk-char {
+      display: flex; align-items: center; gap: 8px;
+      min-width: 0;
+    }
+    .rk-emoji { font-size: 22px; flex-shrink: 0; }
+    .rk-name {
+      font-weight: 700; font-size: 14px;
+      white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .rk-wave, .rk-kills, .rk-damage, .rk-date {
+      font-size: 13px;
+      color: #ccc;
+      font-family: monospace;
+      text-align: right;
+    }
+    .rk-wave { color: #4ecdc4; font-weight: 700; }
+    .rk-kills { color: #e74c3c; font-weight: 700; }
+    .rk-damage { color: #ff8c00; font-weight: 700; }
+    .rk-date { font-size: 11px; color: #666; }
+
+    @media (max-width: 600px) {
+      .ranking-table { min-width: 0; }
+      .ranking-header, .ranking-row {
+        grid-template-columns: 40px 1fr 50px 60px;
+        gap: 6px;
+        padding: 8px;
+      }
+      .rk-damage, .rk-date { display: none; }
+    }
+
+    .ranking-empty {
+      text-align: center; color: #555;
+      font-style: italic; padding: 20px;
+      font-size: 13px;
+    }
+
+    .go-empty {
+      text-align: center; color: #555;
+      font-style: italic; font-size: 12px;
+      padding: 10px;
+    }
+
+    .go-actions {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      justify-content: center;
+      padding-top: 8px;
+    }
+
+    /* ═══ MOBILE ═══ */
     @media (max-width: 480px) {
       .character-grid { grid-template-columns: 1fr; }
       .character-card { min-height: auto; }
@@ -863,15 +1437,20 @@ import {
       .market-grid, .upgrade-grid { grid-template-columns: 1fr; }
       .legendary-grid { grid-template-columns: 1fr; }
       .game-canvas { width: 100%; max-height: calc(100vh - 40px); }
+      .go-resources { grid-template-columns: 1fr 1fr; }
     }
   `]
 })
 export class App {
   private engine = inject(GameEngineService);
+  readonly rankingService = inject(RankingService);
+
   private canvasRef = viewChild<ElementRef<HTMLCanvasElement>>('gameCanvas');
 
   readonly state = this.engine.state;
   readonly availableWeapons = this.engine.availableWeapons;
+  readonly lastRunStats = this.engine.lastRunStats;
+  readonly rankings = this.rankingService.rankings;
   readonly characters = CHARACTERS;
   readonly specialAbilities = SPECIAL_ABILITIES;
   readonly rareItems = RARE_ITEMS;
@@ -886,10 +1465,10 @@ export class App {
     });
   }
 
-  // Menu
+  // ═══ MENU ═══
   selectCharacter(char: Character): void { this.engine.startGame(char); }
 
-  // Loja padrão
+  // ═══ LOJA ═══
   buyWeapon(weapon: Weapon): void { this.engine.tryBuyWeapon(weapon); }
   skipShop(): void { this.engine.skipShop(); }
   sellWeapon(index: number): void { this.engine.sellWeapon(index); }
@@ -899,23 +1478,21 @@ export class App {
     return this.state().ownedLegendaryItems.includes('deathRay') ? 7 : 5;
   }
 
-  // Substituição de arma
   confirmReplace(slot: number): void { this.engine.confirmReplaceWeapon(slot); }
   cancelReplace(): void { this.engine.cancelReplaceWeapon(); }
 
-  // Pause
+  // ═══ PAUSE ═══
   pauseGame(): void { this.engine.pauseGame(); }
   resumeGame(): void { this.engine.resumeGame(); }
   quitToMenu(): void { this.engine.quitToMenu(); }
   restart(): void { this.engine.restart(); }
 
-  // Mercado negro
+  // ═══ LOJAS ═══
   openBlackMarket(): void { this.engine.openBlackMarket(); }
   closeBlackMarket(): void { this.engine.closeBlackMarket(); }
   buySpecialAbility(id: SpecialAbilityId): void { this.engine.buySpecialAbility(id); }
   buyRareItem(id: RareItemId): void { this.engine.buyRareItem(id); }
 
-  // Upgrades
   buyUpgrade(id: UpgradeId): void { this.engine.buyUpgrade(id); }
   getUpgradePrice(id: UpgradeId): number { return this.engine.getUpgradePrice(id); }
   getUpgradeLevel(id: UpgradeId): number { return this.state().upgrades[id]; }
@@ -924,7 +1501,6 @@ export class App {
     return up ? this.state().upgrades[id] >= up.maxLevel : false;
   }
 
-  // Loja lendária
   openLegendaryShop(): void { this.engine.openLegendaryShop(); }
   closeLegendaryShop(): void { this.engine.closeLegendaryShop(); }
   buyLegendaryItem(id: LegendaryItemId): void { this.engine.buyLegendaryItem(id); }
@@ -932,10 +1508,11 @@ export class App {
     return this.state().ownedLegendaryItems.includes(id);
   }
 
-  // Helpers
+  // ═══ HELPERS ═══
   isOwned(id: RareItemId): boolean {
     return this.state().ownedRareItems.includes(id);
   }
+
   getBehaviorLabel(weapon: Weapon): string {
     const labels: Record<string, string> = {
       single: 'Tiro Simples', spread: 'Leque', pierce: 'Perfurante',
@@ -943,5 +1520,52 @@ export class App {
       melee: 'Corpo a Corpo', boomerang: 'Bumerangue'
     };
     return labels[weapon.behavior] ?? '';
+  }
+
+  // ═══ FORMATADORES ═══
+  formatNumber(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+    return String(Math.round(n));
+  }
+
+  formatTime(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+
+  getRankMedal(pos: number): string {
+    switch (pos) {
+      case 1: return '🥇';
+      case 2: return '🥈';
+      case 3: return '🥉';
+      default: return `${pos}º`;
+    }
+  }
+
+  // ═══ LOOKUPS POR ID ═══
+  getSpecialAbilityIcon(id: string): string {
+    return SPECIAL_ABILITIES.find(a => a.id === id)?.icon ?? '❓';
+  }
+  getSpecialAbilityName(id: string): string {
+    return SPECIAL_ABILITIES.find(a => a.id === id)?.name ?? '—';
+  }
+  getSpecialAbilityDescription(id: string): string {
+    return SPECIAL_ABILITIES.find(a => a.id === id)?.description ?? '';
+  }
+
+  getRareItemIcon(id: string): string {
+    return RARE_ITEMS.find(i => i.id === id)?.icon ?? '❓';
+  }
+  getRareItemName(id: string): string {
+    return RARE_ITEMS.find(i => i.id === id)?.name ?? '—';
+  }
+
+  getLegendaryItemIcon(id: string): string {
+    return LEGENDARY_ITEMS.find(i => i.id === id)?.icon ?? '❓';
+  }
+  getLegendaryItemName(id: string): string {
+    return LEGENDARY_ITEMS.find(i => i.id === id)?.name ?? '—';
   }
 }
