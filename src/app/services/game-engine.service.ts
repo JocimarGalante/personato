@@ -2214,4 +2214,57 @@ export class GameEngineService {
   getLegendaryItems() { return LEGENDARY_ITEMS; }
   getUpgrades() { return UPGRADES; }
   getCurrentWeapons(): Weapon[] { return this.currentWeapons; }
+
+  // ═════════════════════════════════════════════════════════
+  // CONTROLES TOUCH (JOYSTICK VIRTUAL)
+  // ═════════════════════════════════════════════════════════
+
+  /**
+   * Aplica input do joystick virtual como se fosse WASD.
+   * dx/dy normalizados (-1 a 1).
+   */
+  setMoveInput(dx: number, dy: number): void {
+    // Aplica na "keys" simulando WASD com uma zona morta de 0.3
+    this.keys['w'] = dy < -0.3;
+    this.keys['s'] = dy > 0.3;
+    this.keys['a'] = dx < -0.3;
+    this.keys['d'] = dx > 0.3;
+
+    // Atualiza a direção de mira com o mesmo vetor
+    const magnitude = Math.hypot(dx, dy);
+    if (magnitude > 0.3) {
+      this.facingAngle = Math.atan2(dy, dx);
+    }
+  }
+
+  /**
+   * Limpa o input do joystick (dedo levantado da tela).
+   */
+  clearMoveInput(): void {
+    this.keys['w'] = false;
+    this.keys['s'] = false;
+    this.keys['a'] = false;
+    this.keys['d'] = false;
+  }
+
+  /**
+   * Dispara a habilidade Q (chamada pelo botão touch).
+   */
+  triggerAbilityQ(): void {
+    this.useActiveAbility('Q');
+  }
+
+  /**
+   * Dispara a habilidade especial E (chamada pelo botão touch).
+   */
+  triggerAbilityE(): void {
+    this.useSpecialAbility();
+  }
+
+  /**
+   * Alterna auto-aim (chamado pelo botão touch).
+   */
+  toggleAutoAimPublic(): void {
+    this.toggleAutoAim();
+  }
 }
